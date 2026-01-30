@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Environment
+.env.local
+.env.*.local
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Deployment scripts
+deploy_*.sh
+deploy_*.ps1
+setup_*.ps1
+*.md
+
+# Separate processes (not part of the bot)
+process_documents/
+
+# GCP Service Account Keys
+SA-*.json
