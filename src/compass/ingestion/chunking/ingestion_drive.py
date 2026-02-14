@@ -13,8 +13,8 @@ import psycopg2
 import psycopg2.extras as extras
 from loguru import logger
 
-import vertexai
-from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
+from google import genai
+from google.genai.types import EmbedContentConfig
 
 
 @dataclass
@@ -26,9 +26,9 @@ class IngestionConfig:
     drive_chunks_subfolder: str = "chunks"
 
     # Vertex AI
-    project_id: str = "daf-aip-singularity-comp-sb"
-    vertex_location: str = "us-east1"
-    embedding_model: str = "text-multilingual-embedding-002"
+    project_id: str = ""
+    vertex_location: str = ""
+    embedding_model: str = ""
 
     # AlloyDB
     alloydb_host: str | None = None
@@ -49,6 +49,16 @@ class IngestionConfig:
         """Set defaults from environment if not provided."""
         import os
 
+        if not self.project_id:
+            self.project_id = os.getenv(
+                "GCS_PROJECT_ID", os.getenv("GCP_PROJECT_ID", "")
+            )
+        if not self.vertex_location:
+            self.vertex_location = os.getenv("VERTEX_LOCATION", "us-east1")
+        if not self.embedding_model:
+            self.embedding_model = os.getenv(
+                "EMBEDDING_MODEL", "text-multilingual-embedding-002"
+            )
         if not self.knowledge_table:
             self.knowledge_table = os.getenv(
                 "KNOWLEDGE_TABLE", "multiagent_rag_model.sat_knowledge"
@@ -102,7 +112,7 @@ class DriveChunkIngester:
     def __init__(self, config: IngestionConfig):
         self.config = config
         self._drive_service = None
-        self._embedding_model = None
+        self._genai_client = None
         self._conn = None
         self._chunks_folder_id = None
 
@@ -115,17 +125,18 @@ class DriveChunkIngester:
         return self._drive_service
 
     @property
-    def embedding_model(self) -> TextEmbeddingModel:
-        if self._embedding_model is None:
-            vertexai.init(
+    def genai_client(self) -> genai.Client:
+        """Cliente de Google GenAI para embeddings."""
+        if self._genai_client is None:
+            self._genai_client = genai.Client(
+                vertexai=True,
                 project=self.config.project_id,
                 location=self.config.vertex_location,
             )
-            self._embedding_model = TextEmbeddingModel.from_pretrained(
-                self.config.embedding_model
+            logger.info(
+                f"✅ Cliente GenAI inicializado para '{self.config.embedding_model}'"
             )
-            logger.info(f"✅ Modelo embeddings '{self.config.embedding_model}' cargado")
-        return self._embedding_model
+        return self._genai_client
 
     @property
     def conn(self):
@@ -148,9 +159,26 @@ class DriveChunkIngester:
 
         from ..sources.drive_service import drive_list_all
 
+        parent_id = self.config.drive_pdf_folder_id
+        target_name = self.config.drive_chunks_subfolder
+
+        # Debug: mostrar información de la carpeta padre
+        try:
+            parent_info = (
+                self.drive_service.files()
+                .get(fileId=parent_id, fields="id, name", supportsAllDrives=True)
+                .execute()
+            )
+            logger.warning(
+                f"🔍 [DEBUG] Buscando '{target_name}' en carpeta: "
+                f"ID={parent_info['id']}, Nombre='{parent_info['name']}'"
+            )
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo info de carpeta padre {parent_id}: {e}")
+
         query = (
-            f"'{self.config.drive_pdf_folder_id}' in parents "
-            f"and name='{self.config.drive_chunks_subfolder}' "
+            f"'{parent_id}' in parents "
+            f"and name='{target_name}' "
             f"and mimeType='application/vnd.google-apps.folder' "
             f"and trashed=false"
         )
@@ -162,12 +190,28 @@ class DriveChunkIngester:
         )
 
         if not folders:
+            # Diagnóstico: listar qué subcarpetas SÍ existen
+            all_subs_query = (
+                f"'{parent_id}' in parents "
+                f"and mimeType='application/vnd.google-apps.folder' "
+                f"and trashed=false"
+            )
+            all_subs = drive_list_all(
+                self.drive_service, q=all_subs_query, fields="files(id, name)"
+            )
+            sub_names = [s.get("name") for s in all_subs]
+            logger.error(f"❌ Subcarpeta '{target_name}' NO encontrada")
+            logger.error(f"   📂 Subcarpetas disponibles en {parent_id}: {sub_names}")
+
             raise ValueError(
-                f"Subcarpeta '{self.config.drive_chunks_subfolder}' no encontrada "
-                f"en carpeta {self.config.drive_pdf_folder_id}"
+                f"Subcarpeta '{target_name}' no encontrada en carpeta {parent_id}. "
+                f"Subcarpetas disponibles: {sub_names}"
             )
 
         self._chunks_folder_id = folders[0].get("id")
+        logger.info(
+            f"✅ Subcarpeta '{target_name}' encontrada: {self._chunks_folder_id}"
+        )
         return self._chunks_folder_id
 
     def run(self) -> dict:
@@ -313,18 +357,19 @@ class DriveChunkIngester:
             valid_indices = [item[0] for item in valid_items]
             valid_texts = [item[1] for item in valid_items]
 
-            inputs = [
-                TextEmbeddingInput(text=t, task_type="RETRIEVAL_DOCUMENT")
-                for t in valid_texts
-            ]
-
             logger.info(
-                f"   → Embeddings para {len(inputs)} chunks (lote {i // api_limit + 1})"
+                f"   → Embeddings para {len(valid_texts)} chunks (lote {i // api_limit + 1})"
             )
 
             try:
-                response = self.embedding_model.get_embeddings(inputs)
-                for orig_idx, emb in zip(valid_indices, response):
+                response = self.genai_client.models.embed_content(
+                    model=self.config.embedding_model,
+                    contents=valid_texts,
+                    config=EmbedContentConfig(
+                        task_type="RETRIEVAL_DOCUMENT",
+                    ),
+                )
+                for orig_idx, emb in zip(valid_indices, response.embeddings):
                     batch_embeddings[orig_idx] = emb.values
             except Exception as e:
                 logger.error(f"⚠️ Error embeddings: {e}")
@@ -564,6 +609,7 @@ class DriveChunkIngester:
         updated = cursor.rowcount
 
         # 2. Insertar chunks nuevos o modificados
+        # ON CONFLICT DO NOTHING maneja duplicados por mismo timestamp o IDs duplicados en origen
         cursor.execute(f"""
             INSERT INTO {target_table} {target_cols}
             SELECT {select_cols}
@@ -575,6 +621,7 @@ class DriveChunkIngester:
                   AND t.ah_checksum = s.ah_checksum
                   AND t.ai_current_flag = 1
             )
+            ON CONFLICT DO NOTHING
         """)
         inserted = cursor.rowcount
 
@@ -670,11 +717,13 @@ def _build_subseq_semantic(chunk_id: str, kh_knowledge: bytes) -> str:
 
 
 def _checksum_semantic(ch: dict) -> bytes:
+    """Calculate checksum including both content and embedding_content."""
     return _sha1_bytes(
         json.dumps(
             {
                 "id": ch.get("id"),
                 "content": ch.get("content", ""),
+                "embedding_content": ch.get("embedding_content", ""),
                 "section_path": ch.get("section_path", ""),
                 "page_start": ch.get("page_start"),
                 "page_end": ch.get("page_end"),

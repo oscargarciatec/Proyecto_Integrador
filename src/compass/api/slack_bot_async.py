@@ -6,6 +6,7 @@ Para uso con FastAPI/Starlette (ASGI).
 
 import re
 import asyncio
+from dataclasses import dataclass, field
 import time
 from collections import defaultdict
 from slack_bolt.async_app import AsyncApp
@@ -59,7 +60,261 @@ class EventDeduplicator:
             del self.processed_events[k]
 
 
-def convert_markdown_to_slack_mrkdwn(text: str) -> str:
+def clean_malformed_slack_links(text: str) -> str:
+    """
+    Limpia links malformados provenientes de PDFs procesados (SharePoint/Word).
+
+    Detecta patrones como <Política de Eventos|Política de Eventos> donde:
+    - Ambos lados del pipe son idénticos o muy similares (no-URL)
+    - El primer lado NO es una URL válida (no contiene ://)
+
+    Preserva links válidos de Slack:
+    - <https://example.com|Mi enlace> → mantiene
+    - <mailto:user@example.com|Email> → mantiene
+
+    Args:
+        text: Texto con posibles links malformados
+
+    Returns:
+        Texto limpio con links malformados convertidos a texto plano
+    """
+    if not text:
+        return text
+
+    def replace_malformed_link(match: re.Match) -> str:
+        full_match = match.group(0)
+        left_part = match.group(1)
+        right_part = match.group(2)
+
+        # Si el lado izquierdo contiene "://", es una URL válida → preservar
+        if "://" in left_part:
+            return full_match
+
+        # Si el lado izquierdo es un mailto:, también preservar
+        if left_part.startswith("mailto:"):
+            return full_match
+
+        # Si ambos lados son idénticos o muy similares → link malformado
+        # Normalizar para comparación (quitar espacios extra, case-insensitive)
+        left_normalized = left_part.strip().lower()
+        right_normalized = right_part.strip().lower()
+
+        if left_normalized == right_normalized:
+            # Link duplicado malformado → usar solo el texto derecho (display)
+            return right_part.strip()
+
+        # Si no es URL y ambos lados son diferentes, asumir que el derecho
+        # es el texto a mostrar (comportamiento conservador)
+        return right_part.strip()
+
+    # Patrón para capturar <algo|algo> donde "algo" no contiene < ni >
+    pattern = r"<([^<>|]+)\|([^<>]+)>"
+    return re.sub(pattern, replace_malformed_link, text)
+
+
+@dataclass
+class ParsedTable:
+    """Resultado de parsear una tabla markdown."""
+
+    headers: list[str]
+    rows: list[list[str]]
+    title: str | None = None
+
+
+@dataclass
+class SlackFormattedOutput:
+    """Output de convert_markdown_to_slack_mrkdwn con tablas extraídas."""
+
+    text: str
+    tables: list[ParsedTable] = field(default_factory=list)
+
+
+def parse_markdown_table(md_table: str) -> ParsedTable | None:
+    """
+    Parsea una tabla markdown (pipes) y devuelve headers + rows.
+
+    Detecta opcionalmente un título en la línea inmediatamente anterior
+    a la tabla (e.g., **Tabla 4 - Autorizaciones Contratos**).
+
+    Args:
+        md_table: String con la tabla markdown completa (incluyendo
+                  posible línea de título previa).
+
+    Returns:
+        ParsedTable con headers, rows y título, o None si no es válida.
+    """
+    lines = [line.strip() for line in md_table.strip().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+
+    # Detectar título: línea que NO empieza con | justo antes de la tabla
+    title: str | None = None
+    table_start = 0
+    for i, line in enumerate(lines):
+        if line.startswith("|"):
+            table_start = i
+            break
+        # La última línea que no empieza con | antes de las filas con |
+        # es el posible título
+        candidate = line.strip("*").strip()
+        if candidate:
+            title = candidate
+
+    table_lines = [line for line in lines[table_start:] if line.startswith("|")]
+    if len(table_lines) < 2:
+        return None
+
+    def split_row(line: str) -> list[str]:
+        """Divide una línea de tabla markdown en celdas."""
+        # Quitar | inicial y final, luego split por |
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        return [cell.strip() for cell in stripped.split("|")]
+
+    def is_separator(line: str) -> bool:
+        """Detecta la línea separadora (|---|---|)."""
+        cells = split_row(line)
+        return all(re.match(r"^[:\-\s]+$", cell) for cell in cells)
+
+    # La primera línea es el header, la segunda debe ser el separador
+    headers = split_row(table_lines[0])
+
+    if not is_separator(table_lines[1]):
+        return None
+
+    rows: list[list[str]] = []
+    for row_line in table_lines[2:]:
+        if is_separator(row_line):
+            continue
+        cells = split_row(row_line)
+        # Pad o trim para coincidir con el número de headers
+        while len(cells) < len(headers):
+            cells.append("")
+        rows.append(cells[: len(headers)])
+
+    return ParsedTable(headers=headers, rows=rows, title=title)
+
+
+def _strip_cell_markdown(text: str) -> str:
+    """Limpia formato markdown de texto de celda para raw_text."""
+    # **bold** → bold
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    # *italic* → italic
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    # __bold__ → bold
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    # _italic_ → italic
+    text = re.sub(r"_(.+?)_", r"\1", text)
+    # [text](url) → text
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = text.strip()
+    # Slack requiere text no vacío en celdas raw_text
+    return text if text else " "
+
+
+def markdown_table_to_slack_block(table: ParsedTable) -> dict:
+    """
+    Convierte un ParsedTable a un Slack Block Kit `table` block.
+
+    Usa `raw_text` cells para máxima compatibilidad.
+    Limpia formato markdown de las celdas (bold, italic, links).
+    Slack permite máximo 1 table block por mensaje, 100 rows, 20 columns.
+
+    Returns:
+        Dict con la estructura JSON del table block.
+    """
+    # Header row
+    header_cells = [
+        {"type": "raw_text", "text": _strip_cell_markdown(h)} for h in table.headers
+    ]
+
+    num_cols = len(table.headers)
+
+    # Data rows — pad/trim to match header column count
+    data_rows = []
+    for row in table.rows[:99]:  # max 100 rows total (1 header + 99 data)
+        cells = [
+            {"type": "raw_text", "text": _strip_cell_markdown(cell)} for cell in row
+        ]
+        # Pad short rows
+        while len(cells) < num_cols:
+            cells.append({"type": "raw_text", "text": " "})
+        # Trim extra columns
+        cells = cells[:num_cols]
+        data_rows.append(cells)
+
+    all_rows = [header_cells] + data_rows
+
+    block: dict = {
+        "type": "table",
+        "rows": all_rows,
+    }
+
+    # Column settings: wrap text for all columns
+    col_settings = [{"align": "left", "is_wrapped": True} for _ in table.headers]
+    block["column_settings"] = col_settings[:20]  # max 20 columns
+
+    return block
+
+
+def markdown_table_to_code_block(table: ParsedTable) -> str:
+    """
+    Convierte un ParsedTable a un code block monospaciado (fallback).
+
+    Usado cuando hay más de una tabla en la respuesta (Slack solo
+    permite 1 table block por mensaje).
+
+    El contenido no se trunca para preservar fidelidad con el original.
+
+    Returns:
+        String con la tabla formateada dentro de ``` ```.
+    """
+    # Calcular ancho máximo por columna
+    col_widths = [len(h) for h in table.headers]
+    for row in table.rows:
+        for i, cell in enumerate(row):
+            if i < len(col_widths):
+                col_widths[i] = max(col_widths[i], len(cell))
+
+    def format_row(cells: list[str]) -> str:
+        parts = []
+        for i, cell in enumerate(cells):
+            width = col_widths[i] if i < len(col_widths) else len(cell)
+            parts.append(cell.ljust(width))
+        return " | ".join(parts)
+
+    lines: list[str] = []
+
+    # Título
+    if table.title:
+        lines.append(table.title)
+        lines.append("")
+
+    # Header
+    lines.append(format_row(table.headers))
+    # Separador
+    lines.append(" | ".join("-" * w for w in col_widths))
+    # Rows
+    for row in table.rows:
+        lines.append(format_row(row))
+
+    return "```\n" + "\n".join(lines) + "\n```"
+
+
+# Regex para detectar bloques de tabla markdown (con título bold opcional)
+# Permite que la última fila no tenga \n (fin de string o fin de texto)
+_MD_TABLE_RE = re.compile(
+    r"(?:^[ \t]*\*\*[^|\n]+\*\*[ \t]*\n)?"
+    r"(?:^[ \t]*\|.+\|[ \t]*\n)"
+    r"(?:^[ \t]*\|.+\|[ \t]*(?:\n|$))+",
+    re.MULTILINE,
+)
+
+
+def convert_markdown_to_slack_mrkdwn(text: str) -> SlackFormattedOutput:
     """
     Convierte formato Markdown estándar a formato mrkdwn de Slack.
 
@@ -70,34 +325,99 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> str:
     - `codigo` para código inline
     - ```codigo``` para bloques de código
     - > para citas
+    - • para bullet points (en lugar de * o -)
+
+    Nota: Slack NO soporta encabezados (#, ##, ###), se convierten a negrita.
+
+    Además, extrae tablas markdown y las devuelve parseadas para
+    renderizarlas como Slack table blocks nativos.
+
+    Returns:
+        SlackFormattedOutput con el texto convertido y las tablas extraídas.
     """
     if not text:
-        return text
+        return SlackFormattedOutput(text=text)
 
-    # Proteger bloques de código (no modificar su contenido)
-    code_blocks = []
+    # ── Paso 0: Extraer tablas markdown ANTES de cualquier conversión ──
+    tables: list[ParsedTable] = []
+    table_placeholders: dict[str, str] = {}
 
-    def protect_code_block(match):
+    # Patrón para detectar títulos de tabla en el texto previo al match
+    # Ej: "**Tabla 1 - Autorizaciones**", "Tabla 2 - Compras", "### Tabla 3"
+    _TITLE_LINE_RE = re.compile(
+        r"^[ \t]*(?:\*\*|#{1,6}\s*)?"
+        r"((?:Tabla|Table)\s*\d+\b[^\n]*?)"
+        r"\*{0,2}[ \t]*$",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    _last_match_end = [0]  # mutable para closure
+
+    def extract_table(match: re.Match) -> str:
+        raw = match.group(0)
+        parsed = parse_markdown_table(raw)
+        if parsed is None:
+            return raw  # No es tabla válida, dejar intacto
+
+        # Si parse_markdown_table no detectó título, buscar en texto
+        # entre el final del match anterior y el inicio de este match
+        if parsed.title is None:
+            gap_text = text[_last_match_end[0]:match.start()]
+            title_matches = _TITLE_LINE_RE.findall(gap_text)
+            if title_matches:
+                # Tomar el último match (más cercano a la tabla)
+                parsed = ParsedTable(
+                    headers=parsed.headers,
+                    rows=parsed.rows,
+                    title=title_matches[-1].strip(),
+                )
+
+        _last_match_end[0] = match.end()
+
+        idx = len(tables)
+        tables.append(parsed)
+        placeholder = f":::TABLE_{idx}:::"
+        # Todas las tablas se envían como native Slack table blocks separados
+        table_placeholders[placeholder] = ""
+        return placeholder
+
+    text = _MD_TABLE_RE.sub(extract_table, text)
+
+    # ── Paso 1: Proteger bloques de código ──
+    code_blocks: list[str] = []
+
+    def protect_code_block(match: re.Match) -> str:
         code_blocks.append(match.group(0))
-        return f"__CODE_BLOCK_{len(code_blocks) - 1}__"
+        return f":::CODE_BLOCK_{len(code_blocks) - 1}:::"
 
     # Proteger bloques de código multilinea
     text = re.sub(r"```[\s\S]*?```", protect_code_block, text)
     # Proteger código inline
     text = re.sub(r"`[^`]+`", protect_code_block, text)
 
-    # Convertir **texto** a *texto* (negrita)
-    # Usar regex para manejar correctamente los asteriscos
+    # ── Paso 2: Conversiones Markdown → mrkdwn ──
+    # Encabezados → negrita
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+    # **texto** → *texto*
     text = re.sub(r"\*\*([^*]+)\*\*", r"*\1*", text)
-
-    # Convertir __texto__ a _texto_ (cursiva alternativa en Markdown)
+    # __texto__ → _texto_
     text = re.sub(r"__([^_]+)__", r"_\1_", text)
+    # Bullets
+    text = re.sub(r"^(\s*)[\*\-]\s+", r"\1• ", text, flags=re.MULTILINE)
+    # Links [texto](url) → <url|texto>
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
 
-    # Restaurar bloques de código
+    # ── Paso 3: Restaurar bloques de código ──
     for i, block in enumerate(code_blocks):
-        text = text.replace(f"__CODE_BLOCK_{i}__", block)
+        text = text.replace(f":::CODE_BLOCK_{i}:::", block)
 
-    return text
+    # ── Paso 4: Reemplazar placeholders de tablas adicionales ──
+    for placeholder, replacement in table_placeholders.items():
+        text = text.replace(placeholder, replacement)
+
+    # ── Paso 5: Limpiar links malformados ──
+    text = clean_malformed_slack_links(text)
+
+    return SlackFormattedOutput(text=text, tables=tables)
 
 
 class AsyncSlackChatbot(AsyncApp):
@@ -233,6 +553,7 @@ class AsyncSlackChatbot(AsyncApp):
         user_key = user_info.get("email") or user_id
 
         # 3. Obtener respuesta del RAG (ASYNC!)
+        # Nombre del usuario ahora viene de la BD en chatbot_core
         output, retrieved_docs = await self.core.get_chatbot_msg_async(
             user_query=user_query,
             user_key=user_key,
@@ -260,7 +581,19 @@ class AsyncSlackChatbot(AsyncApp):
         MAX_SLACK_CHARS = 2900
 
         # Convertir Markdown estándar a mrkdwn de Slack
-        slack_output = convert_markdown_to_slack_mrkdwn(output)
+        formatted = convert_markdown_to_slack_mrkdwn(output)
+        slack_output = formatted.text
+        extracted_tables = formatted.tables
+
+        # Construir table blocks para TODAS las tablas extraídas
+        table_blocks: list[tuple[dict, ParsedTable]] = []
+        if extracted_tables:
+            for i, tbl in enumerate(extracted_tables):
+                block = markdown_table_to_slack_block(tbl)
+                table_blocks.append((block, tbl))
+                print(f"[TABLE] Table {i+1}/{len(extracted_tables)}: title={tbl.title!r}, headers={tbl.headers}, rows={len(tbl.rows)}")
+        else:
+            print(f"[TABLE] No tables extracted from LLM output ({len(output)} chars)")
 
         if len(slack_output) <= MAX_SLACK_CHARS:
             response_args = {
@@ -309,6 +642,16 @@ class AsyncSlackChatbot(AsyncApp):
             if thread_ts:
                 response_args["thread_ts"] = thread_ts
             bot_response = await say(**response_args)
+
+            # Enviar cada tabla como mensaje separado con native Slack table block
+            for block, tbl in table_blocks:
+                await self._send_table_block(
+                    say,
+                    block,
+                    tbl,
+                    thread_ts=bot_response.get("ts") if thread_ts else None,
+                )
+
             await self._remove_old_feedback_buttons(
                 channel_id=channel_id,
                 thread_ts=thread_ts,
@@ -327,6 +670,15 @@ class AsyncSlackChatbot(AsyncApp):
             if thread_ts:
                 first_args["thread_ts"] = thread_ts
             bot_response = await say(**first_args)
+
+            # Enviar cada tabla como mensaje separado con native Slack table block
+            for block, tbl in table_blocks:
+                await self._send_table_block(
+                    say,
+                    block,
+                    tbl,
+                    thread_ts=bot_response["ts"],
+                )
 
             for chunk in chunks[1:]:
                 await say(
@@ -389,6 +741,61 @@ class AsyncSlackChatbot(AsyncApp):
         except SlackApiError as exc:
             if exc.response.get("error") != "no_reaction":
                 raise
+
+    async def _send_table_block(
+        self,
+        say_or_client,
+        table_block: dict,
+        table: "ParsedTable",
+        thread_ts: str | None = None,
+        *,
+        channel: str | None = None,
+    ):
+        """
+        Envía una tabla como Slack table block nativo via attachments.
+
+        Slack requiere que los table blocks se envíen dentro del campo
+        ``attachments`` (no como top-level ``blocks``).
+        Si Slack rechaza el bloque, hace fallback a code block monospaciado.
+
+        Args:
+            say_or_client: La función ``say`` de Bolt o ``client.chat_postMessage``.
+            table_block: Dict con la estructura del table block.
+            table: ParsedTable original (para generar fallback).
+            thread_ts: Timestamp del hilo (opcional).
+            channel: Canal destino (solo si se usa client.chat_postMessage).
+        """
+        table_title = table.title
+        title_text = f"📊 *{table_title}*" if table_title else "📊 *Tabla*"
+
+        # Slack table blocks MUST be inside attachments[].blocks, not top-level blocks
+        kwargs: dict[str, Any] = {
+            "text": title_text,
+            "attachments": [{"blocks": [table_block]}],
+        }
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        if channel:
+            kwargs["channel"] = channel
+
+        try:
+            await say_or_client(**kwargs)
+            print("[TABLE] ✅ Native table block sent successfully")
+        except Exception as e:
+            print(f"[TABLE] ⚠️ Native table block failed: {e}")
+            print("[TABLE] Falling back to code block...")
+            # Fallback: enviar como code block monospaciado
+            fallback_text = f"{title_text}\n{markdown_table_to_code_block(table)}"
+            fallback_kwargs: dict[str, Any] = {"text": fallback_text}
+            if thread_ts:
+                fallback_kwargs["thread_ts"] = thread_ts
+            if channel:
+                fallback_kwargs["channel"] = channel
+            try:
+                await say_or_client(**fallback_kwargs)
+                print("[TABLE] ✅ Code block fallback sent successfully")
+            except Exception as e2:
+                print(f"[TABLE] ❌ Code block fallback also failed: {e2}")
 
     def _split_message(self, text: str, max_chars: int) -> list[str]:
         """Divide un mensaje largo en chunks."""
@@ -511,6 +918,7 @@ class AsyncSlackChatbot(AsyncApp):
             print(f"[SENSITIVE] User key: {user_key}")
 
             # Obtener respuesta del RAG
+            # Nombre del usuario ahora viene de la BD en chatbot_core
             print("[SENSITIVE] Calling RAG...")
             output, retrieved_docs = await self.core.get_chatbot_msg_async(
                 user_query=user_query,
@@ -538,12 +946,20 @@ class AsyncSlackChatbot(AsyncApp):
             print("[SENSITIVE] Interaction saved")
 
             # Enviar respuesta por DM (convertir Markdown a mrkdwn de Slack)
-            slack_output = convert_markdown_to_slack_mrkdwn(output)
+            formatted = convert_markdown_to_slack_mrkdwn(output)
+            slack_output = formatted.text
+            extracted_tables = formatted.tables
             dm_intro = (
                 "🔒 *Respuesta privada a tu consulta en el canal:*\n\n"
                 f"> _{user_query[:100]}{'...' if len(user_query) > 100 else ''}_\n\n"
             )
             full_message = dm_intro + slack_output
+
+            # Construir table blocks para TODAS las tablas extraídas
+            table_blocks: list[tuple[dict, ParsedTable]] = []
+            if extracted_tables:
+                for tbl in extracted_tables:
+                    table_blocks.append((markdown_table_to_slack_block(tbl), tbl))
 
             # Incluir botones de feedback (consistente con _process_message)
             await client.chat_postMessage(
@@ -590,6 +1006,16 @@ class AsyncSlackChatbot(AsyncApp):
                     },
                 ],
             )
+
+            # Enviar cada tabla como mensaje DM separado con native Slack table block
+            for block, tbl in table_blocks:
+                await self._send_table_block(
+                    client.chat_postMessage,
+                    block,
+                    tbl,
+                    channel=dm_channel,
+                )
+
             print(f"[SENSITIVE] DM sent successfully to channel: {dm_channel}")
 
         except Exception as e:

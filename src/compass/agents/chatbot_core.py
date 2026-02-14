@@ -5,7 +5,7 @@ import re
 from datetime import date, datetime
 from typing import Dict, Any, List, Optional
 
-from langchain_google_vertexai import VertexAIEmbeddings, ChatVertexAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_google_alloydb_pg import (
     AlloyDBEngine,
     AlloyDBVectorStore,
@@ -55,12 +55,15 @@ class ChatbotCore:
         self.engine: Optional[AlloyDBEngine] = None
         self.persistence_engine = None  # Engine separado para persistencia
         self.vector_store: Optional[AlloyDBVectorStore] = None
+        self.hybrid_search_config: Optional[HybridSearchConfig] = None
         self.rag_chain: Optional[Runnable] = None
         self.persistence: Optional[DataVaultManager] = None
         self.ERROR_OUTPUT = "Lo sentimos, ha habido un problema! Ponte en contacto con los administradores :)"
         self._initialized = False
         # Cache para contexto personalizado de usuario (TTL 1 hora, max 500 usuarios)
         self.user_context_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
+        # Texto formateado con las políticas disponibles (cargado desde hub_knowledge)
+        self.available_policies_text: str = ""
 
     @classmethod
     async def create(cls, settings: ChatbotSettings) -> "ChatbotCore":
@@ -107,8 +110,91 @@ class ChatbotCore:
         # Inicializar agente de forma async
         await self.persistence.ensure_agent_exists_async()
 
+        # Cargar lista de políticas disponibles desde hub_knowledge
+        await self._load_available_policies_async()
+
         self._initialized = True
         logger.info("ChatbotCore initialized successfully (async).")
+
+    async def _load_available_policies_async(self) -> None:
+        """
+        Carga la lista de políticas disponibles desde hub_knowledge.
+        Genera un texto formateado con nombres legibles de documentos.
+        """
+        query = text("""
+            SELECT DISTINCT ax_knowledge AS documento
+            FROM multiagent_rag_model.hub_knowledge
+            ORDER BY ax_knowledge
+        """)
+
+        def _clean_doc_name(doc_name: str) -> str:
+            """Genera un nombre legible del documento."""
+            import re
+
+            # Quitar extensión
+            name = doc_name.rsplit(".", 1)[0]
+            # Reemplazar separadores
+            name = name.replace("-", " ").replace("_", " ")
+            # Limpiar fechas redundantes (ej: "9dic25", "sep25", "dic 2025")
+            name = re.sub(
+                r"\s*\d{0,2}\s*(dic|sep|ene|feb|mar|abr|may|jun|jul|ago|oct|nov)\s*\d{2,4}\s*",
+                " ",
+                name,
+                flags=re.IGNORECASE,
+            )
+            # Normalizar espacios y capitalizar
+            name = " ".join(name.split()).title()
+            return name
+
+        try:
+            async with self.persistence_engine._pool.connect() as conn:
+                result = await conn.execute(query)
+                rows = result.fetchall()
+
+            if not rows:
+                self.available_policies_text = (
+                    "• No hay documentos cargados actualmente."
+                )
+                logger.warning("No policies found in hub_knowledge")
+                return
+
+            lines = []
+            for row in rows:
+                doc_name = row[0] or "Documento sin nombre"
+
+                # Filtrar archivos de datos (Excel/CSV sin contexto de política)
+                lower_name = doc_name.lower()
+                if lower_name.endswith((".xlsx", ".xls", ".csv")):
+                    # Saltar archivos que parecen datos transaccionales
+                    if any(kw in lower_name for kw in ["detalle", "bcd travel"]):
+                        continue
+
+                # Filtrar documentos internos que no deben mostrarse al usuario
+                # Usar keywords amplias para ser robusto ante renombramientos
+                _ln = lower_name.replace("-", " ").replace("_", " ")
+                hidden_patterns = [
+                    lambda n: "compass" in n and "faq" in n,
+                    lambda n: "manual" in n and "gasto" in n and "orbita" in n,
+                    lambda n: "gastos" in n and "orbita" in n,
+                ]
+                if any(p(_ln) for p in hidden_patterns):
+                    continue
+
+                clean_name = _clean_doc_name(doc_name)
+                if clean_name:
+                    lines.append(f"• {clean_name}")
+
+            if not lines:
+                self.available_policies_text = (
+                    "• No hay políticas disponibles actualmente."
+                )
+            else:
+                self.available_policies_text = "\n".join(lines)
+            logger.info(f"Loaded {len(lines)} policies from hub_knowledge")
+
+        except Exception as e:
+            logger.error(f"Error loading available policies: {e}")
+            self.available_policies_text = "• Error al cargar políticas disponibles."
 
     async def _initialize_engine_async(self) -> AlloyDBEngine:
         """Inicializa el AlloyDB Engine de forma async.
@@ -127,7 +213,7 @@ class ChatbotCore:
                 )
                 async_engine = create_async_engine(
                     connection_string,
-                    pool_size=20,
+                    pool_size=10,
                     max_overflow=10,
                     pool_timeout=30,
                     pool_recycle=1800,
@@ -168,22 +254,24 @@ class ChatbotCore:
 
     async def _initialize_vector_store_async(self) -> AlloyDBVectorStore:
         """Inicializa el AlloyDB Vector Store de forma async."""
-        lc_embeddings = VertexAIEmbeddings(
-            model_name=self.settings.embedding_model_name,
+        lc_embeddings = GoogleGenerativeAIEmbeddings(
+            model=self.settings.embedding_model_name,
             project=self.settings.vertex_ai_project_id,
             location=self.settings.vertex_ai_region,
+            vertexai=True,
+            task_type="RETRIEVAL_QUERY",
         )
 
         # CONFIGURACIÓN DE BÚSQUEDA HÍBRIDA
         # fetch_top_k: chunks a recuperar por cada método (vectorial y FTS) antes de fusión
         # rrf_k: constante para Reciprocal Rank Fusion (mayor valor = más peso a matches parciales)
-        hybrid_search_config = HybridSearchConfig(
+        self.hybrid_search_config = HybridSearchConfig(
             tsv_column=self.settings.fts_vector_column_name,
             tsv_lang="public.spanish_unaccent",
             fusion_function=reciprocal_rank_fusion,
             fusion_function_parameters={
                 "rrf_k": 60,
-                "fetch_top_k": 80,
+                "fetch_top_k": 30,
             },
         )
 
@@ -196,7 +284,7 @@ class ChatbotCore:
             id_column="ax_sub_sequence",
             content_column="ax_content",
             embedding_service=lc_embeddings,
-            hybrid_search_config=hybrid_search_config,
+            hybrid_search_config=self.hybrid_search_config,
             metadata_columns=["ai_current_flag"],
         )
         logger.info("AlloyDB VectorStore initialized (async).")
@@ -205,34 +293,26 @@ class ChatbotCore:
     def _initialize_rag_chain(self) -> Runnable:
         """Sets up the RAG chain with conversational memory."""
         # LLM principal para respuestas de calidad
-        llm = ChatVertexAI(
+        llm = ChatGoogleGenerativeAI(
             model=self.settings.llm_model_name,
             project=self.settings.vertex_ai_project_id,
             location=self.settings.vertex_ai_region,
             temperature=0,
+            vertexai=True,
         )
 
-        # LLM rápido para contextualización (solo extrae keywords)
-        # gemini-2.0-flash-lite: económico y optimizado para tareas simples
-        llm_fast = ChatVertexAI(
-            model="gemini-2.0-flash-lite",
+        # LLM rápido para contextualización
+        # Modelo configurable via CONTEXTUALIZE_MODEL_NAME (default: gemini-2.5-flash-lite)
+        llm_fast = ChatGoogleGenerativeAI(
+            model=self.settings.contextualize_model_name,
             project=self.settings.vertex_ai_project_id,
             location=self.settings.vertex_ai_region,
             temperature=0,
+            vertexai=True,
         )
 
         # Filtro como DICCIONARIO (Requerido por versiones recientes de la librería)
         filter_dict = {"ai_current_flag": 1}
-
-        hybrid_search_config = HybridSearchConfig(
-            tsv_column=self.settings.fts_vector_column_name,
-            tsv_lang="public.spanish_unaccent",
-            fusion_function=reciprocal_rank_fusion,
-            fusion_function_parameters={
-                "rrf_k": 60,
-                "fetch_top_k": 80,
-            },
-        )
 
         section_pattern = re.compile(r"\b\d+(?:\.\d+){1,}\b")
 
@@ -288,7 +368,7 @@ class ChatbotCore:
                 query_text,
                 k=k,
                 filter=filter_dict,
-                hybrid_search_config=hybrid_search_config,
+                hybrid_search_config=self.hybrid_search_config,
             )
 
         async def _fts_search(query_text: str, k: int) -> List[Document]:
@@ -330,6 +410,261 @@ class ChatbotCore:
                 )
                 for row in rows
             ]
+
+        # Patrón para detectar chunks multi-parte: "(Parte 1/2)", "(Parte 2/2)", etc.
+        part_pattern = re.compile(r"\(Parte (\d+)/(\d+)\)")
+
+        async def _fetch_chunks_by_subseq(subseqs: List[str]) -> List[Document]:
+            """Recupera chunks específicos por sus ax_sub_sequence."""
+            if (
+                not subseqs
+                or not self.engine
+                or not getattr(self.engine, "_pool", None)
+            ):
+                return []
+
+            sql = text(
+                f"""
+                SELECT ax_sub_sequence, ax_content, ai_current_flag
+                FROM {self.settings.db_schema_name}.{self.settings.collection_table_name}
+                WHERE ai_current_flag = 1
+                  AND ax_sub_sequence = ANY(:subseqs)
+                """
+            )
+
+            try:
+                async with self.engine._pool.connect() as conn:
+                    result = await conn.execute(sql, {"subseqs": subseqs})
+                    rows = result.fetchall()
+            except Exception as exc:
+                logger.warning("Sibling chunk fetch failed", exc_info=exc)
+                return []
+
+            return [
+                Document(
+                    page_content=row[1],
+                    metadata={
+                        "ax_sub_sequence": row[0],
+                        "ai_current_flag": row[2],
+                        "retrieval": "sibling_expansion",
+                    },
+                )
+                for row in rows
+            ]
+
+        async def _fetch_section_chunks(
+            source_pdf: str, section_name: str, limit: int = 5
+        ) -> List[Document]:
+            """
+            Busca chunks de la misma sección usando FTS.
+
+            Útil cuando no tenemos ax_sub_sequence pero conocemos el PDF y sección.
+            Ejemplo: source_pdf="Política de Eventos.pdf", section_name="6. NORMAS GENERALES"
+            """
+            if not self.engine or not getattr(self.engine, "_pool", None):
+                return []
+
+            # Limpiar nombres para FTS
+            clean_section = section_name.strip()
+
+            # Buscar chunks que contengan el nombre del PDF y la sección
+            sql = text(
+                f"""
+                SELECT ax_sub_sequence, ax_content, ai_current_flag
+                FROM {self.settings.db_schema_name}.{self.settings.collection_table_name}
+                WHERE ai_current_flag = 1
+                  AND ax_content ILIKE :section_pattern
+                ORDER BY ax_sub_sequence
+                LIMIT :limit
+                """
+            )
+
+            try:
+                # Buscar contenido que empiece con "PDF-SECCION (Parte"
+                pattern = f"{source_pdf}-{clean_section}%Parte%"
+                async with self.engine._pool.connect() as conn:
+                    result = await conn.execute(
+                        sql, {"section_pattern": pattern, "limit": limit}
+                    )
+                    rows = result.fetchall()
+            except Exception as exc:
+                logger.warning(f"Section chunk fetch failed: {exc}")
+                return []
+
+            logger.info(f"   🔎 FTS section search found {len(rows)} chunks")
+            return [
+                Document(
+                    page_content=row[1],
+                    metadata={
+                        "ax_sub_sequence": row[0],
+                        "ai_current_flag": row[2],
+                        "retrieval": "section_fts",
+                    },
+                )
+                for row in rows
+            ]
+
+        async def _expand_sibling_chunks(
+            docs: List[Document], max_siblings_per_section: int = 2
+        ) -> List[Document]:
+            """
+            Expande chunks multi-parte para incluir chunks hermanos adyacentes.
+
+            Detecta chunks que son parte de una sección dividida (e.g., "Parte 1/2")
+            y busca los chunks adyacentes (±1) para dar contexto sin inundar.
+            Limitado a max_siblings_per_section extras por sección.
+            """
+            if not docs:
+                return docs
+
+            expanded: List[Document] = []
+            seen_content_hashes: set[str] = set()  # Para deduplicar por contenido
+            seen_subseqs: set[str] = set()
+            missing_subseqs: List[str] = []
+
+            for doc in docs:
+                meta = doc.metadata or {}
+                content = doc.page_content or ""
+
+                # Deduplicar por hash del contenido (primeros 200 chars)
+                content_hash = content[:200]
+                if content_hash in seen_content_hashes:
+                    continue
+                seen_content_hashes.add(content_hash)
+                expanded.append(doc)
+
+                # Verificar si es multi-parte buscando "(Parte X/Y)" en el contenido
+                match = part_pattern.search(content)
+                if match:
+                    part_num = int(match.group(1))
+                    total_parts = int(match.group(2))
+                    logger.info(
+                        f"🔍 Multi-part chunk detected: Parte {part_num}/{total_parts}"
+                    )
+
+                    # Intentar obtener ax_sub_sequence del metadata o extraer del contenido
+                    subseq = meta.get("ax_sub_sequence", "")
+
+                    # Si no hay subseq en metadata, buscar por sección usando FTS
+                    # Formato del contenido: "source.pdf-SECCION (Parte X/Y)-..."
+                    if not subseq or "-semantic-chunk-" not in subseq:
+                        # Extraer PDF y sección del contenido
+                        # Soporta: "Política de Eventos.pdf-6. NORMAS GENERALES (Parte 1/2)"
+                        # Soporta: "politica-gastos-viajes.pdf-5. POLÍTICAS > 5.1. Reglamento (Parte 1/6)"
+                        header_match = re.match(
+                            r"^(.+?\.pdf)-(.+?)\s*\(Parte \d+/\d+\)", content
+                        )
+                        if header_match:
+                            source_pdf = header_match.group(1)
+                            section_name = header_match.group(2).strip()
+                            logger.info(f"   📎 Using FTS for section: {section_name}")
+                            # Buscar solo hermanos adyacentes, no toda la sección
+                            section_docs = await _fetch_section_chunks(
+                                source_pdf,
+                                section_name,
+                                limit=max_siblings_per_section + 1,
+                            )
+                            siblings_added = 0
+                            for sdoc in section_docs:
+                                if siblings_added >= max_siblings_per_section:
+                                    break
+                                sdoc_hash = (sdoc.page_content or "")[:200]
+                                if sdoc_hash not in seen_content_hashes:
+                                    seen_content_hashes.add(sdoc_hash)
+                                    expanded.append(sdoc)
+                                    siblings_added += 1
+                        continue  # Ya procesamos este caso
+
+                    # Extraer doc_prefix del ax_sub_sequence
+                    # Formato: "a1b2c3d4-semantic-chunk-002"
+                    if "-semantic-chunk-" in subseq:
+                        doc_prefix, _, chunk_str = subseq.rpartition("-semantic-chunk-")
+                        try:
+                            chunk_num = int(chunk_str)
+                            # Solo expandir hermanos adyacentes (±1),
+                            # no toda la sección, para no inundar el contexto
+                            siblings_requested = 0
+                            for offset in (-1, 1):
+                                if siblings_requested >= max_siblings_per_section:
+                                    break
+                                sibling_num = chunk_num + offset
+                                if sibling_num >= 0:
+                                    sibling_subseq = (
+                                        f"{doc_prefix}-semantic-chunk-{sibling_num:03d}"
+                                    )
+                                    if sibling_subseq not in seen_subseqs:
+                                        missing_subseqs.append(sibling_subseq)
+                                        seen_subseqs.add(sibling_subseq)
+                                        siblings_requested += 1
+                                        logger.info(
+                                            f"   📎 Will fetch sibling: {sibling_subseq}"
+                                        )
+                        except ValueError:
+                            pass
+
+            # Buscar chunks hermanos faltantes en la BD
+            if missing_subseqs:
+                logger.info(f"🔗 Expanding {len(missing_subseqs)} sibling chunks")
+                sibling_docs = await _fetch_chunks_by_subseq(missing_subseqs)
+                expanded.extend(sibling_docs)
+                logger.info(f"   ✅ Retrieved {len(sibling_docs)} sibling chunks")
+            else:
+                logger.info(
+                    "ℹ️ No sibling expansion needed (no multi-part chunks with IDs)"
+                )
+
+            # Ordenar por ax_sub_sequence para mantener orden lógico
+            expanded.sort(key=lambda d: (d.metadata or {}).get("ax_sub_sequence", ""))
+
+            return expanded
+
+        def _extract_source_from_doc(doc: Document) -> str:
+            """Extract source PDF name from ax_sub_sequence or page_content."""
+            meta = doc.metadata or {}
+            subseq = meta.get("ax_sub_sequence", "")
+            # ax_sub_sequence format: "hash-semantic-chunk-NNN" or content starts with "file.pdf-..."
+            if "-semantic-chunk-" in subseq:
+                return subseq.rpartition("-semantic-chunk-")[0]
+            # Fallback: extract from content header (e.g. "politica-gastos-viajes.pdf-5. NORMAS...")
+            content = (doc.page_content or "")[:200]
+            pdf_match = re.match(r"^(.+?\.pdf)", content, re.IGNORECASE)
+            if pdf_match:
+                return pdf_match.group(1).lower()
+            return ""
+
+        def _cap_per_source(
+            docs: List[Document], max_per_source: int = 3
+        ) -> List[Document]:
+            """
+            Limit chunks per source document to ensure diversity.
+            Preserves retrieval order (higher-ranked chunks kept first).
+            Sibling-expansion chunks are exempt from the cap.
+            """
+            source_counts: Dict[str, int] = {}
+            capped: List[Document] = []
+            for doc in docs:
+                meta = doc.metadata or {}
+                # Don't cap sibling-expansion chunks (they complete multi-part sections)
+                if meta.get("retrieval") == "sibling_expansion":
+                    capped.append(doc)
+                    continue
+                source = _extract_source_from_doc(doc)
+                if not source:
+                    capped.append(doc)
+                    continue
+                count = source_counts.get(source, 0)
+                if count < max_per_source:
+                    source_counts[source] = count + 1
+                    capped.append(doc)
+                else:
+                    logger.info(
+                        f"🔀 Capped chunk from '{source}' (already {max_per_source} chunks)"
+                    )
+            if len(capped) < len(docs):
+                logger.info(
+                    f"🔀 Source diversity cap: {len(docs)} → {len(capped)} chunks"
+                )
+            return capped
 
         async def _retrieve_with_fallback(inputs: Dict[str, Any]):
             raw_query = await contextualize_chain.ainvoke(inputs)
@@ -375,7 +710,8 @@ class ChatbotCore:
                     "Hybrid search via AlloyDBVectorStore OK; docs=%s",
                     len(hybrid_docs),
                 )
-                return hybrid_docs
+                expanded = await _expand_sibling_chunks(hybrid_docs)
+                return _cap_per_source(expanded)
 
             similarity_docs = await active_retriever.ainvoke(composite_query)
 
@@ -384,13 +720,14 @@ class ChatbotCore:
                 fts_query_text = user_query
             fts_docs = await _fts_search(fts_query_text, effective_k)
             if fts_docs:
-                return _merge_docs(fts_docs, similarity_docs, effective_k)
-            return similarity_docs
+                merged = _merge_docs(fts_docs, similarity_docs, effective_k)
+                expanded = await _expand_sibling_chunks(merged)
+                return _cap_per_source(expanded)
+            expanded = await _expand_sibling_chunks(similarity_docs)
+            return _cap_per_source(expanded)
 
         history_aware_retriever = RunnableLambda(_retrieve_with_fallback)
 
-        # Prompt del Sistema (QA) - El que responde al usuario final
-        # NOTA: {user_context} se inyecta dinamicamente con las preferencias del usuario
         # Prompt del Sistema (QA) - El que responde al usuario final
         # NOTA: {user_context} se inyecta dinamicamente con las preferencias del usuario
         qa_prompt = QA_PROMPT_TEMPLATE
@@ -424,64 +761,71 @@ class ChatbotCore:
             logger.error(f"Error getting conversation history: {e}")
             return []
 
-    async def get_user_context_async(self, user_email: str) -> Optional[str]:
+    async def get_user_profile_async(
+        self, user_email: str
+    ) -> tuple[str | None, str | None]:
         """
-        Obtiene el contexto personalizado del usuario desde la BD.
+        Obtiene nombre y contexto del usuario en UNA sola query optimizada.
 
-        El contexto es generado periodicamente por compass_context_generator
-        y contiene preferencias de comunicacion del usuario (tono, formato, etc.)
+        El nombre viene de sat_compass_users_data (persistido desde Slack).
+        El contexto viene de sat_compass_context (generado por procedure).
 
         Args:
             user_email: Email del usuario (ej: 'juan@spin.com')
 
         Returns:
-            Texto con el contexto del usuario o None si no existe.
+            Tuple (display_name, context) - cualquiera puede ser None
         """
         if not user_email or "@" not in user_email:
-            return None
+            return None, None
 
-        # Verificar cache primero
-        if user_email in self.user_context_cache:
-            cached_value = self.user_context_cache[user_email]
+        # Verificar cache primero (cacheamos el tuple completo)
+        cache_key = f"profile:{user_email}"
+        if cache_key in self.user_context_cache:
+            cached_value = self.user_context_cache[cache_key]
             if cached_value is not None:
-                logger.debug(f"User context cache HIT for {user_email}")
+                logger.debug(f"User profile cache HIT for {user_email}")
                 return cached_value
-            # Si es None cacheado, significa que ya verificamos y no hay contexto
-            return None
+            # Si es None cacheado, retornar (None, None)
+            return None, None
 
+        # Query optimizada: LEFT JOIN para obtener usuario aunque no tenga contexto
         query = text("""
-            SELECT cur.ax_context 
-            FROM multiagent_rag_model.sat_compass_context cur
-            INNER JOIN multiagent_rag_model.lnk_context lctx 
-                ON cur.kh_context = lctx.kh_context
-            INNER JOIN multiagent_rag_model.sat_compass_users_data usr 
-                ON usr.kh_user = lctx.kh_user 
+            SELECT usr.ax_display_nm, cur.ax_context
+            FROM multiagent_rag_model.sat_compass_users_data usr
+            LEFT JOIN multiagent_rag_model.lnk_context lctx
+                ON usr.kh_user = lctx.kh_user
                 AND usr.ax_src_system_datastore = lctx.ax_src_system_datastore
-            WHERE usr.ax_email = :email 
-              AND cur.ai_current_flag = 1 
+            LEFT JOIN multiagent_rag_model.sat_compass_context cur
+                ON cur.kh_context = lctx.kh_context
+                AND cur.ai_current_flag = 1
+            WHERE usr.ax_email = :email
               AND usr.ai_current_flag = 1
             LIMIT 1
         """)
 
         try:
-            # Usar el metodo interno del engine para ejecutar queries async
             async with self.persistence_engine._pool.connect() as conn:
                 result = await conn.execute(query, {"email": user_email})
                 row = result.fetchone()
-                if row and row[0]:
-                    context = row[0]
+                if row:
+                    display_name = row[0]  # ax_display_nm
+                    context = row[1]  # ax_context (puede ser None)
                     # Guardar en cache
-                    self.user_context_cache[user_email] = context
-                    logger.info(f"User context loaded and cached for {user_email}")
-                    return context
+                    self.user_context_cache[cache_key] = (display_name, context)
+                    logger.info(
+                        f"User profile loaded: {user_email}, "
+                        f"name={display_name}, has_context={context is not None}"
+                    )
+                    return display_name, context
                 else:
-                    # Usuario sin contexto aun - guardar None en cache para evitar queries repetidas
-                    self.user_context_cache[user_email] = None
-                    logger.debug(f"No context found for {user_email} (cached as None)")
-                    return None
+                    # Usuario no existe en BD aún (primer mensaje)
+                    self.user_context_cache[cache_key] = (None, None)
+                    logger.debug(f"User {user_email} not in DB yet (first message)")
+                    return None, None
         except Exception as e:
-            logger.warning(f"Error fetching user context for {user_email}: {e}")
-            return None
+            logger.warning(f"Error fetching user profile for {user_email}: {e}")
+            return None, None
 
     async def get_chatbot_msg_async(
         self,
@@ -489,6 +833,7 @@ class ChatbotCore:
         user_key: str = None,
         channel_id: str = None,
         thread_ts: str = None,
+        user_display_name: str = None,
     ) -> tuple[str, List[Document]]:
         """Invoca la cadena RAG de forma async con memoria conversacional."""
         try:
@@ -508,14 +853,14 @@ class ChatbotCore:
                     )
                 )
 
-            # 2. Iniciar carga de contexto personalizado del usuario (en paralelo)
-            context_task = None
+            # 2. Iniciar carga de perfil del usuario (nombre + contexto en UNA query)
+            profile_task = None
             if user_key:
-                context_task = asyncio.create_task(
-                    self.get_user_context_async(user_key)
+                profile_task = asyncio.create_task(
+                    self.get_user_profile_async(user_key)
                 )
 
-            # 3. Sanitizar PII mientras se cargan historial y contexto (operacion sync rapida)
+            # 3. Sanitizar PII mientras se cargan historial y perfil (operacion sync rapida)
             sanitization_result = PIISanitizer.sanitize(
                 user_query, redact_amounts=True, new_schema=True
             )
@@ -547,10 +892,23 @@ class ChatbotCore:
             else:
                 logger.info("No user_id/channel_id provided, using empty history")
 
-            # 5. Esperar contexto personalizado del usuario
+            # 5. Esperar perfil del usuario (nombre + contexto en UNA query)
             user_context_text = ""
-            if context_task:
-                user_context = await context_task
+            final_display_name = user_display_name  # Fallback si viene de Slack
+            if profile_task:
+                db_display_name, user_context = await profile_task
+                # Usar nombre de BD si existe, sino el que viene de Slack, sino derivar del email
+                if db_display_name:
+                    final_display_name = db_display_name
+                elif not final_display_name and user_key and "@" in user_key:
+                    # Fallback: derivar del email para usuarios nuevos
+                    # "claudio.montiel@spin.co" -> "Claudio Montiel"
+                    final_display_name = (
+                        user_key.split("@")[0]
+                        .replace(".", " ")
+                        .replace("_", " ")
+                        .title()
+                    )
                 if user_context:
                     user_context_text = f"""### Perfil de comunicacion de este Spinner:
 {user_context}
@@ -558,6 +916,10 @@ class ChatbotCore:
 Adapta tu tono, formato y nivel de detalle segun estas preferencias.
 ---"""
                     logger.info(f"User personalization context applied for {user_key}")
+
+            # Extraer solo el primer nombre para saludos más amigables
+            if final_display_name and " " in final_display_name:
+                final_display_name = final_display_name.split()[0]
 
             # Log seguro (sin PII)
             logger.info(f"User Query (sanitized): {sanitized_query}")
@@ -573,6 +935,8 @@ Adapta tu tono, formato y nivel de detalle segun estas preferencias.
                     "input": sanitized_query.strip(),
                     "chat_history": chat_history,
                     "user_context": user_context_text,
+                    "user_name": final_display_name or "Spinner",
+                    "available_policies": self.available_policies_text,
                 }
             )
 
@@ -609,7 +973,13 @@ Adapta tu tono, formato y nivel de detalle segun estas preferencias.
                 logger.info("Retrying without chat history...")
                 try:
                     result = await self.rag_chain.ainvoke(
-                        {"input": user_query.strip(), "chat_history": []}
+                        {
+                            "input": user_query.strip(),
+                            "chat_history": [],
+                            "user_context": "",
+                            "user_name": "Spinner",
+                            "available_policies": self.available_policies_text,
+                        }
                     )
                     output = result.get("answer", "")
                     retrieved_docs = result.get("context", [])
@@ -624,10 +994,13 @@ Adapta tu tono, formato y nivel de detalle segun estas preferencias.
         user_key: str = None,
         channel_id: str = None,
         thread_ts: str = None,
+        user_display_name: str = None,
     ) -> tuple[str, List[Document]]:
         """Wrapper síncrono para get_chatbot_msg_async (compatibilidad con Flask/Slack Bolt)."""
         return self._run_async(
-            self.get_chatbot_msg_async(user_query, user_key, channel_id, thread_ts)
+            self.get_chatbot_msg_async(
+                user_query, user_key, channel_id, thread_ts, user_display_name
+            )
         )
 
     def _run_async(self, coro):

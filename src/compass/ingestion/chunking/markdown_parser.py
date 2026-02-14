@@ -95,6 +95,13 @@ class MarkdownSectionParser:
         r"^\*{0,2}(\d+\.\d+(?:\.\d+)*)(?:\.)?\s+(.+?)\*{0,2}$"
     )
 
+    # Patrón para detectar headers de sección envueltos en negritas dentro del contenido.
+    # Docling a veces produce "**7. EVENTOS EN LOCALIDADES INTERNAS:**" en vez de "## 7. ..."
+    # Captura: grupo(1) = número (ej: "7" o "7.1"), grupo(2) = título
+    BOLD_SECTION_HEADER_PATTERN = re.compile(
+        r"^\*{2}\s*(\d+(?:\.\d+)*)\.\s+(.+?):?\s*\*{2}:?\s*$"
+    )
+
     # Headers no estructurales (no deben elevarse a sección)
     NON_STRUCTURAL_HEADER_PATTERN = re.compile(
         r"^(tabla|cuadro|figura|ilustraci[oó]n|gr[aá]fico)\b",
@@ -404,6 +411,31 @@ class MarkdownSectionParser:
                         "line_start": i,
                     }
                     continue
+
+                bold_match = self.BOLD_SECTION_HEADER_PATTERN.match(
+                    line.strip()
+                )
+                if bold_match:
+                    section_num = bold_match.group(1)
+                    title = bold_match.group(2).strip().rstrip(":")
+                    header_level = len(section_num.split("."))
+                    header_text = f"{section_num} {title}"
+
+                    if current_block["content"] or current_block["header"]:
+                        current_block["content"] = "\n".join(
+                            current_block["content"]
+                        ).strip()
+                        blocks.append(current_block)
+
+                    current_block = {
+                        "header": header_text,
+                        "header_level": header_level,
+                        "raw_header": line.strip(),
+                        "content": [],
+                        "line_start": i,
+                    }
+                    continue
+
                 current_block["content"].append(line)
 
         # Agregar último bloque
@@ -550,8 +582,14 @@ class MarkdownSectionParser:
 
         # FILTRO: Headers que terminan en ":" son items de lista, NO secciones
         # Ej: "1. Por robo:", "2. Daño material:" → items de lista
+        # Excepción: títulos MAYÚSCULAS numerados son secciones válidas
+        # Ej: "7. EVENTOS EN LOCALIDADES INTERNAS:" → sección válida
         if header.endswith(":"):
-            return None, None, 0
+            title_part = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", header[:-1]).strip()
+            if title_part and title_part == title_part.upper() and len(title_part.split()) >= 2:
+                header = header[:-1].strip()
+            else:
+                return None, None, 0
 
         # FILTRO: Headers que empiezan con minúscula después del número → items
         # Ej: "1. el colaborador debe..." → item de lista

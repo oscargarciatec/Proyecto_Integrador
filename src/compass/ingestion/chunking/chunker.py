@@ -270,6 +270,20 @@ class PolicyDocumentChunker:
         if current:
             result.append(separator.join(current))
 
+        # Merge small trailing parts: si la última parte es muy pequeña,
+        # fusionarla con la anterior (siempre que no excedan max_tokens juntas)
+        min_part_tokens = max_tokens // 4
+        while len(result) > 1:
+            last_tokens = count_tokens(result[-1])
+            if last_tokens >= min_part_tokens:
+                break
+            prev_tokens = count_tokens(result[-2])
+            if prev_tokens + last_tokens + count_tokens(separator) <= max_tokens:
+                last = result.pop()
+                result[-1] = result[-1] + separator + last
+            else:
+                break
+
         return result
 
     def _apply_overlap(self, chunks: List[Chunk], overlap_tokens: int) -> List[Chunk]:
