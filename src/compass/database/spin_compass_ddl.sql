@@ -128,7 +128,7 @@ CREATE TABLE multiagent_rag_model.sat_agents_data
 	ax_description       VARCHAR  NULL ,
 	ax_url               VARCHAR  NULL ,
 	aj_agent_definition  JSON  NULL,
-	aj_priming           JSON  NULL,
+	ax_priming           VARCHAR  NULL,
 	aj_agent_examples    JSON  NULL,
 	ab_is_supervisor     BOOLEAN NULL,
 	PRIMARY KEY (kh_agent, ct_valid_from_dt)
@@ -234,7 +234,7 @@ CREATE TABLE multiagent_rag_model.sat_knowledge
 	ax_src_system_datastore VARCHAR  NULL ,
 	ah_checksum          BYTEA  NOT NULL ,
 	ax_content           VARCHAR  NULL ,
-	aa_embedding         VECTOR(768)  NULL,
+	aa_embedding         VECTOR(1536)  NULL,
 	aa_fts_vector	   TSVECTOR  NULL ,
 	PRIMARY KEY (kh_knowledge, ax_sub_sequence, ct_valid_from_dt)
 ) ;

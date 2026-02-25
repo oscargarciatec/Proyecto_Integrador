@@ -155,9 +155,9 @@ def parse_markdown_table(md_table: str) -> ParsedTable | None:
             table_start = i
             break
         # La última línea que no empieza con | antes de las filas con |
-        # es el posible título
-        candidate = line.strip("*").strip()
-        if candidate:
+        # es el posible título (excluir oraciones introductorias que terminan en ':')
+        candidate = line.strip("*# ").strip()
+        if candidate and not candidate.endswith(":"):
             title = candidate
 
     table_lines = [line for line in lines[table_start:] if line.startswith("|")]
@@ -304,10 +304,68 @@ def markdown_table_to_code_block(table: ParsedTable) -> str:
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-# Regex para detectar bloques de tabla markdown (con título bold opcional)
+def _normalize_table_title(title: str | None) -> str | None:
+    """Normaliza títulos de tabla para mostrarlos en negrita en Slack."""
+    if not title:
+        return None
+
+    normalized = title.strip()
+
+    # Limpiar wrappers markdown comunes y artefactos huérfanos
+    normalized = re.sub(r"^#{1,6}\s*", "", normalized)
+    normalized = re.sub(r"^\*+\s*", "", normalized)
+    normalized = re.sub(r"\s*\*+$", "", normalized)
+
+    # Quitar prefijos tipo "Tabla 2 - ..." o "Tabla 2: ..."
+    normalized = re.sub(
+        r"^tabla\s*\d+\s*[-:–—]?\s*",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or None
+
+
+def _enforce_bold_on_table_title_mentions(text: str, tables: list[ParsedTable]) -> str:
+    """Asegura negritas en líneas del texto que mencionan títulos de tablas extraídas."""
+    if not text or not tables:
+        return text
+
+    title_lookup: dict[str, str] = {}
+    for table in tables:
+        normalized_title = _normalize_table_title(table.title)
+        if normalized_title:
+            title_lookup[normalized_title.casefold()] = normalized_title
+
+    if not title_lookup:
+        return text
+
+    formatted_lines: list[str] = []
+    for line in text.split("\n"):
+        stripped_line = line.strip()
+        if not stripped_line:
+            formatted_lines.append(line)
+            continue
+
+        normalized_line = _normalize_table_title(stripped_line)
+        if normalized_line and normalized_line.casefold() in title_lookup:
+            canonical = title_lookup[normalized_line.casefold()]
+            formatted_lines.append(f"*{canonical}*")
+            continue
+
+        formatted_lines.append(line)
+
+    return "\n".join(formatted_lines)
+
+
+# Regex para detectar bloques de tabla markdown (con título opcional)
+# Captura línea previa si es: **bold**, ### header, o texto plano sin pipes
+# Excluye líneas que terminan en ':' (oraciones introductorias, no títulos)
 # Permite que la última fila no tenga \n (fin de string o fin de texto)
 _MD_TABLE_RE = re.compile(
-    r"(?:^[ \t]*\*\*[^|\n]+\*\*[ \t]*\n)?"
+    r"(?:^[ \t]*(?:\*\*[^|\n]+\*\*|#{1,6}\s+[^|\n]+|(?![ \t]*\|)[^\n|]*[^\n|: \t])[ \t]*\n)?"
     r"(?:^[ \t]*\|.+\|[ \t]*\n)"
     r"(?:^[ \t]*\|.+\|[ \t]*(?:\n|$))+",
     re.MULTILINE,
@@ -343,10 +401,11 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> SlackFormattedOutput:
     table_placeholders: dict[str, str] = {}
 
     # Patrón para detectar títulos de tabla en el texto previo al match
-    # Ej: "**Tabla 1 - Autorizaciones**", "Tabla 2 - Compras", "### Tabla 3"
+    # Captura cualquier línea significativa (≥4 chars, sin pipes) como título
+    # Ej: "**Tabla 1 - Autorizaciones**", "Esquema de autorizaciones", "### Tabla 3"
     _TITLE_LINE_RE = re.compile(
         r"^[ \t]*(?:\*\*|#{1,6}\s*)?"
-        r"((?:Tabla|Table)\s*\d+\b[^\n]*?)"
+        r"([^\n|]{4,}?)"
         r"\*{0,2}[ \t]*$",
         re.MULTILINE | re.IGNORECASE,
     )
@@ -361,14 +420,18 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> SlackFormattedOutput:
         # Si parse_markdown_table no detectó título, buscar en texto
         # entre el final del match anterior y el inicio de este match
         if parsed.title is None:
-            gap_text = text[_last_match_end[0]:match.start()]
+            gap_text = text[_last_match_end[0] : match.start()]
             title_matches = _TITLE_LINE_RE.findall(gap_text)
-            if title_matches:
-                # Tomar el último match (más cercano a la tabla)
+            # Filtrar oraciones introductorias que terminan en ':'
+            valid_titles = [
+                t.strip() for t in title_matches if not t.strip().endswith(":")
+            ]
+            if valid_titles:
+                # Tomar el último match válido (más cercano a la tabla)
                 parsed = ParsedTable(
                     headers=parsed.headers,
                     rows=parsed.rows,
-                    title=title_matches[-1].strip(),
+                    title=valid_titles[-1],
                 )
 
         _last_match_end[0] = match.end()
@@ -397,8 +460,22 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> SlackFormattedOutput:
     # ── Paso 2: Conversiones Markdown → mrkdwn ──
     # Encabezados → negrita
     text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
-    # **texto** → *texto*
+    # **texto** → *texto* (Slack usa * simple para negrita)
+    # Primero manejar ***texto*** (bold+italic) → solo bold
+    text = re.sub(r"\*{3}([^*]+)\*{3}", r"*\1*", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"*\1*", text)
+
+    # Heurística de recuperación: Si una línea empieza con * (no bullet) y no cierra, cerrar con *
+    # Evita bullets (* texto) y evita líneas que ya terminan en *
+    # Regex: ^(\*[^*\s].*?[^*])\s*$
+    # Grupo 1: Todo el texto válido (sin trailing spaces)
+    # Reemplazo: \1*  (cierra el bold correctamente)
+    text = re.sub(r"^(\*[^*\s].*?[^*])\s*$", r"\1*", text, flags=re.MULTILINE)
+
+    # Tras la conversión, todo bold válido es *texto*. Cualquier ** restante es huérfano
+    text = text.replace("**", "")
+    # Limpiar líneas de asteriscos huérfanos que ensucian el render
+    text = re.sub(r"^[ \t]*\*+[ \t]*$", "", text, flags=re.MULTILINE)
     # __texto__ → _texto_
     text = re.sub(r"__([^_]+)__", r"_\1_", text)
     # Bullets
@@ -416,6 +493,9 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> SlackFormattedOutput:
 
     # ── Paso 5: Limpiar links malformados ──
     text = clean_malformed_slack_links(text)
+
+    # ── Paso 6: Forzar negritas en menciones de títulos de tablas en texto principal ──
+    text = _enforce_bold_on_table_title_mentions(text, tables)
 
     return SlackFormattedOutput(text=text, tables=tables)
 
@@ -457,6 +537,14 @@ class AsyncSlackChatbot(AsyncApp):
         # Mensaje directo al bot
         self.message(".*")(self._message_handler)
 
+        # Eventos de edición/borrado de mensajes (no-op para evitar 404 de unhandled)
+        self.event({"type": "message", "subtype": "message_changed"})(
+            self._ignore_message_changed
+        )
+        self.event({"type": "message", "subtype": "message_deleted"})(
+            self._ignore_message_deleted
+        )
+
         # Mención del bot en canal
         self.event("app_mention")(self._handle_app_mention)
 
@@ -467,12 +555,6 @@ class AsyncSlackChatbot(AsyncApp):
         self.action("feedback_positive")(self._handle_button_positive)
         self.action("feedback_negative")(self._handle_button_negative)
         self.view("feedback_comment_modal")(self._handle_feedback_comment)
-
-        # Ignorar subtipos de mensaje (ediciones, etc.)
-        @self.event("message")
-        async def handle_message_events(event, logger):
-            if event.get("subtype") is None:
-                pass
 
     async def _get_user_info(self, user_id: str) -> Dict[str, Any]:
         """Obtiene info del usuario con cache."""
@@ -561,7 +643,7 @@ class AsyncSlackChatbot(AsyncApp):
             thread_ts=thread_ts,
         )
 
-        # 4. Guardar interacción (async - bloqueante para evitar problemas de CPU en Cloud Run)
+        # 4. Preparar metadata para persistencia (antes de enviar respuesta)
         metadata_copy = message.copy()
         if is_mention:
             if "event" in metadata_copy:
@@ -570,14 +652,7 @@ class AsyncSlackChatbot(AsyncApp):
         else:
             metadata_copy["user"] = user_info
 
-        await self.core.save_interaction_async(
-            slack_metadata=metadata_copy,
-            query=user_query,
-            output=output,
-            retrieved_docs=retrieved_docs,
-        )
-
-        # 5. Enviar respuesta con botones de feedback
+        # 5. Enviar respuesta con botones de feedback (ANTES de persistir)
         MAX_SLACK_CHARS = 2900
 
         # Convertir Markdown estándar a mrkdwn de Slack
@@ -591,7 +666,9 @@ class AsyncSlackChatbot(AsyncApp):
             for i, tbl in enumerate(extracted_tables):
                 block = markdown_table_to_slack_block(tbl)
                 table_blocks.append((block, tbl))
-                print(f"[TABLE] Table {i+1}/{len(extracted_tables)}: title={tbl.title!r}, headers={tbl.headers}, rows={len(tbl.rows)}")
+                print(
+                    f"[TABLE] Table {i + 1}/{len(extracted_tables)}: title={tbl.title!r}, headers={tbl.headers}, rows={len(tbl.rows)}"
+                )
         else:
             print(f"[TABLE] No tables extracted from LLM output ({len(output)} chars)")
 
@@ -652,10 +729,14 @@ class AsyncSlackChatbot(AsyncApp):
                     thread_ts=bot_response.get("ts") if thread_ts else None,
                 )
 
-            await self._remove_old_feedback_buttons(
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                current_ts=bot_response.get("ts") if bot_response else None,
+            asyncio.create_task(
+                self._run_background_processing(
+                    self._remove_old_feedback_buttons(
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        current_ts=bot_response.get("ts") if bot_response else None,
+                    )
+                )
             )
         else:
             # Respuesta larga: dividir en chunks
@@ -729,13 +810,29 @@ class AsyncSlackChatbot(AsyncApp):
                 ],
                 thread_ts=bot_response["ts"],
             )
-            await self._remove_old_feedback_buttons(
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                current_ts=feedback_msg.get("ts") if feedback_msg else None,
+            asyncio.create_task(
+                self._run_background_processing(
+                    self._remove_old_feedback_buttons(
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        current_ts=feedback_msg.get("ts") if feedback_msg else None,
+                    )
+                )
             )
 
-        # 6. Quitar reacción
+        # 6. Persistir interacción en background (fire-and-forget, no bloquea al usuario)
+        asyncio.create_task(
+            self._run_background_processing(
+                self.core.save_interaction_async(
+                    slack_metadata=metadata_copy,
+                    query=user_query,
+                    output=output,
+                    retrieved_docs=retrieved_docs,
+                )
+            )
+        )
+
+        # 7. Quitar reacción
         try:
             await client.reactions_remove(channel=channel, timestamp=ts, name="eyes")
         except SlackApiError as exc:
@@ -765,7 +862,7 @@ class AsyncSlackChatbot(AsyncApp):
             thread_ts: Timestamp del hilo (opcional).
             channel: Canal destino (solo si se usa client.chat_postMessage).
         """
-        table_title = table.title
+        table_title = _normalize_table_title(table.title)
         title_text = f"📊 *{table_title}*" if table_title else "📊 *Tabla*"
 
         # Slack table blocks MUST be inside attachments[].blocks, not top-level blocks
@@ -1096,6 +1193,14 @@ class AsyncSlackChatbot(AsyncApp):
 
         # Fire-and-forget: No esperamos a que termine el RAG
         asyncio.create_task(self._run_background_processing(process_wrapper()))
+
+    async def _ignore_message_changed(self, body: Dict[str, Any]):
+        """No-op para mensajes editados (evita unhandled request/404)."""
+        return
+
+    async def _ignore_message_deleted(self, body: Dict[str, Any]):
+        """No-op para mensajes eliminados (evita unhandled request/404)."""
+        return
 
     async def _handle_feedback_reaction(self, body: Dict[str, Any], client):
         """Captura reacciones para feedback."""

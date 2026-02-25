@@ -177,7 +177,7 @@ class ChatbotSettings:
             "EMBEDDING_VECTOR_DIMENSION",
             "Model",
             "embedding_vector_dimension",
-            "768",
+            "1536",
         )
         object.__setattr__(
             self,
@@ -249,7 +249,7 @@ def load_settings() -> ChatbotSettings:
         k_sim_search_num=0,
         llm_model_name="",
         embedding_model_name="",
-        embedding_vector_dimension=768,
+        embedding_vector_dimension=1536,
         contextualize_model_name="",
         db_schema_name="",
         vector_column_name="",
