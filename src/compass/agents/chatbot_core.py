@@ -1,5 +1,6 @@
 # agents/chatbot_core.py
 import asyncio
+import json
 import os
 import re
 from datetime import date, datetime
@@ -17,7 +18,7 @@ from sqlalchemy import text
 from cachetools import TTLCache
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 
 # Imports para memoria conversacional (LangChain 1.0+)
@@ -36,7 +37,7 @@ from config.settings import ChatbotSettings
 from database.data_vault_manager import DataVaultManager
 from utils.pii_sanitizer import PIISanitizer
 from utils.output_validator import OutputValidator
-from prompts.rag_prompt import CONTEXTUALIZE_Q_PROMPT_TEMPLATE, QA_PROMPT_TEMPLATE
+from utils.rag_models import SearchQuery
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ class ChatbotCore:
         self.user_context_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
         # Texto formateado con las políticas disponibles (cargado desde hub_knowledge)
         self.available_policies_text: str = ""
+        # Prompts cargados desde la BD (sat_agents_data.ax_priming)
+        self.db_prompts: Dict[str, str] = {}
 
     @classmethod
     async def create(cls, settings: ChatbotSettings) -> "ChatbotCore":
@@ -84,6 +87,10 @@ class ChatbotCore:
         # Inicializar engine y vectorstore async
         self.engine = await self._initialize_engine_async()
         self.vector_store = await self._initialize_vector_store_async()
+
+        # Cargar prompts desde BD ANTES de construir la RAG chain
+        await self._load_prompts_from_db_async()
+
         self.rag_chain = self._initialize_rag_chain()
 
         # Engine separado para persistencia (evita conflictos con VectorStore)
@@ -96,6 +103,7 @@ class ChatbotCore:
         agent_definition = {
             "llm_model_name": self.settings.llm_model_name,
             "embedding_model_name": self.settings.embedding_model_name,
+            "embedding_vector_dimension": self.settings.embedding_vector_dimension,
             "vertex_ai_project_id": self.settings.vertex_ai_project_id,
             "vertex_ai_region": self.settings.vertex_ai_region,
         }
@@ -196,6 +204,68 @@ class ChatbotCore:
             logger.error(f"Error loading available policies: {e}")
             self.available_policies_text = "• Error al cargar políticas disponibles."
 
+    async def _load_prompts_from_db_async(self) -> None:
+        """
+        Carga los prompts del sistema desde sat_agents_data.ax_priming.
+
+        Lee la fila activa (ai_current_flag = 1) del agente y parsea
+        ax_priming como JSON con las claves:
+          - contextualize_prompt: prompt para contextualización de queries
+          - rag_system_prompt: prompt del sistema RAG para respuestas
+
+        Raises:
+            RuntimeError: Si no hay prompts en la BD.
+        """
+        query = text(f"""
+            SELECT s.ax_priming, s.ct_valid_from_dt
+            FROM {self.settings.db_schema_name}.sat_agents_data s
+            JOIN {self.settings.db_schema_name}.hub_agents h ON s.kh_agent = h.kh_agent
+            WHERE h.ax_agent = :agent_id
+              AND s.ai_current_flag = 1
+            ORDER BY s.ct_valid_from_dt DESC
+            LIMIT 1
+        """)
+
+        try:
+            async with self.engine._pool.connect() as conn:
+                result = await conn.execute(query, {"agent_id": "Compass"})
+                row = result.fetchone()
+
+            if not row or not row[0]:
+                raise RuntimeError(
+                    "No prompts found in sat_agents_data.ax_priming for agent 'Compass'. "
+                    "Please INSERT the initial prompt version before deploying."
+                )
+
+            raw_priming = row[0]
+            version_dt = row[1]
+
+            # Parsear JSON desde el campo TEXT (strict=False permite saltos de línea sin escapar)
+            prompts_data = json.loads(raw_priming, strict=False)
+
+            required_keys = {"contextualize_prompt", "rag_system_prompt"}
+            missing = required_keys - set(prompts_data.keys())
+            if missing:
+                raise RuntimeError(
+                    f"ax_priming is missing required keys: {missing}. "
+                    f"Expected: {required_keys}"
+                )
+
+            self.db_prompts = prompts_data
+
+            # Log de la versión cargada con preview de los prompts
+            logger.info("📝 Prompts loaded from DB (version: %s)", version_dt)
+            for key in required_keys:
+                preview = self.db_prompts[key][:80].replace("\n", " ")
+                logger.info('   🔑 %s: "%s..."', key, preview)
+
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"ax_priming contains invalid JSON: {e}") from e
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Failed to load prompts from DB: {e}") from e
+
     async def _initialize_engine_async(self) -> AlloyDBEngine:
         """Inicializa el AlloyDB Engine de forma async.
 
@@ -260,6 +330,7 @@ class ChatbotCore:
             location=self.settings.vertex_ai_region,
             vertexai=True,
             task_type="RETRIEVAL_QUERY",
+            output_dimensionality=self.settings.embedding_vector_dimension,
         )
 
         # CONFIGURACIÓN DE BÚSQUEDA HÍBRIDA
@@ -285,7 +356,7 @@ class ChatbotCore:
             content_column="ax_content",
             embedding_service=lc_embeddings,
             hybrid_search_config=self.hybrid_search_config,
-            metadata_columns=["ai_current_flag"],
+            metadata_columns=["ai_current_flag", "ax_sub_sequence"],
         )
         logger.info("AlloyDB VectorStore initialized (async).")
         return vector_store
@@ -329,15 +400,19 @@ class ChatbotCore:
         retriever = _build_retriever(self.settings.k_sim_search_num)
 
         # ---------------------------------------------------------
-        # PROMPT DE CONTEXTUALIZACIÓN OPTIMIZADO PARA BÚSQUEDA
+        # PROMPTS DINÁMICOS (cargados desde sat_agents_data.ax_priming)
         # ---------------------------------------------------------
-        # Este prompt reformula la pregunta del usuario para optimizar la búsqueda híbrida (vectorial + FTS).
-        # Preserva elementos críticos como números de sección, referencias legales y valores numéricos.
-        # ---------------------------------------------------------
-        contextualize_q_prompt = CONTEXTUALIZE_Q_PROMPT_TEMPLATE
+        contextualize_q_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", self.db_prompts["contextualize_prompt"]),
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("human", "<user_query>{input}</user_query>"),
+            ]
+        )
 
-        # Usar LLM rápido para contextualización (tarea simple de keywords)
-        contextualize_chain = contextualize_q_prompt | llm_fast | StrOutputParser()
+        # Usar LLM rápido con Extracción Estructurada
+        structured_llm_fast = llm_fast.with_structured_output(SearchQuery)
+        contextualize_chain = contextualize_q_prompt | structured_llm_fast
 
         def _merge_docs(primary: List[Document], secondary: List[Document], k: int):
             merged: List[Document] = []
@@ -519,8 +594,13 @@ class ChatbotCore:
 
             expanded: List[Document] = []
             seen_content_hashes: set[str] = set()  # Para deduplicar por contenido
-            seen_subseqs: set[str] = set()
             missing_subseqs: List[str] = []
+
+            # Pre-poblar seen_subseqs con TODOS los docs originales
+            # para que la expansión de siblings no re-busque chunks ya presentes
+            seen_subseqs: set[str] = {
+                (doc.metadata or {}).get("ax_sub_sequence", "") for doc in docs
+            } - {""}
 
             for doc in docs:
                 meta = doc.metadata or {}
@@ -633,7 +713,7 @@ class ChatbotCore:
             return ""
 
         def _cap_per_source(
-            docs: List[Document], max_per_source: int = 3
+            docs: List[Document], max_per_source: int = 5
         ) -> List[Document]:
             """
             Limit chunks per source document to ensure diversity.
@@ -644,8 +724,8 @@ class ChatbotCore:
             capped: List[Document] = []
             for doc in docs:
                 meta = doc.metadata or {}
-                # Don't cap sibling-expansion chunks (they complete multi-part sections)
-                if meta.get("retrieval") == "sibling_expansion":
+                # No limitar chunks de expansión (completan secciones multi-parte)
+                if meta.get("retrieval") in ("sibling_expansion", "section_fts"):
                     capped.append(doc)
                     continue
                 source = _extract_source_from_doc(doc)
@@ -667,19 +747,35 @@ class ChatbotCore:
             return capped
 
         async def _retrieve_with_fallback(inputs: Dict[str, Any]):
-            raw_query = await contextualize_chain.ainvoke(inputs)
-            query = (raw_query or "").strip()
+            # Ejecutar Extracción Estructurada
+            structured_query: SearchQuery = await contextualize_chain.ainvoke(inputs)
             user_query = (inputs.get("input") or "").strip()
-            if not query:
-                query = user_query
+
+            queries_to_run = []
+
+            if not structured_query or not getattr(
+                structured_query, "sub_queries", None
+            ):
                 logger.warning(
-                    "Contextualized query was empty; falling back to original input."
+                    "Contextualized query sub_queries empty; falling back to original input."
                 )
+                queries_to_run.append(user_query)
             else:
-                # Log del query contextualizado para debugging
-                logger.info(f"🔍 Contextualized query: '{query}'")
-            if not query:
-                return []
+                logger.info(
+                    f"🧠 Detected Original Intent: '{structured_query.original_intent}' | Standalone: {structured_query.is_standalone}"
+                )
+                logger.info(
+                    f"🔀 Query Decomposition produced {len(structured_query.sub_queries)} sub-queries:"
+                )
+                for i, sq in enumerate(structured_query.sub_queries):
+                    sq_text = " ".join(sq.keywords).strip()
+                    logger.info(f"   🔍 Sub-query {i + 1} [{sq.intent}]: '{sq_text}'")
+                    if sq_text:
+                        queries_to_run.append(sq_text)
+
+                if not queries_to_run:
+                    queries_to_run.append(user_query)
+
             effective_k = self.settings.k_sim_search_num
             if section_pattern.search(user_query):
                 effective_k = max(effective_k, 12)
@@ -692,45 +788,68 @@ class ChatbotCore:
                 if effective_k == self.settings.k_sim_search_num
                 else _build_retriever(effective_k)
             )
-            composite_query = f"{query} {user_query}".strip()
 
-            try:
-                hybrid_docs = await _hybrid_similarity_search(
-                    composite_query, effective_k
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Hybrid search via AlloyDBVectorStore failed; falling back to manual hybrid.",
-                    exc_info=exc,
-                )
-                hybrid_docs = []
+            all_hybrid_docs = []
+            all_fts_docs = []
+            all_sim_docs = []
 
-            if hybrid_docs:
+            # Fetch for each sub-query concurrently or sequentially
+            multi_query = len(queries_to_run) > 1
+            for qt in queries_to_run:
+                # Con múltiples sub-queries, cada una busca de forma independiente
+                # para maximizar diversidad de fuentes (cross-policy).
+                # Con una sola sub-query, reforzamos con la query original.
+                composite_query = qt if multi_query else f"{qt} {user_query}".strip()
+
+                try:
+                    hybrid_docs = await _hybrid_similarity_search(
+                        composite_query, effective_k
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Hybrid search failed for '{qt}'; falling back to manual hybrid.",
+                        exc_info=exc,
+                    )
+                    hybrid_docs = []
+
+                all_hybrid_docs.extend(hybrid_docs)
+
+                if not hybrid_docs:
+                    sim_docs = await active_retriever.ainvoke(composite_query)
+                    all_sim_docs.extend(sim_docs)
+
+                    fts_docs = await _fts_search(composite_query, effective_k)
+                    all_fts_docs.extend(fts_docs)
+
+            if all_hybrid_docs:
                 logger.info(
-                    "Hybrid search via AlloyDBVectorStore OK; docs=%s",
-                    len(hybrid_docs),
+                    "Hybrid search via AlloyDBVectorStore OK; total docs=%s",
+                    len(all_hybrid_docs),
                 )
-                expanded = await _expand_sibling_chunks(hybrid_docs)
+                # Deduplicate
+                deduped = _merge_docs(
+                    all_hybrid_docs, [], effective_k * len(queries_to_run)
+                )
+                expanded = await _expand_sibling_chunks(deduped)
                 return _cap_per_source(expanded)
 
-            similarity_docs = await active_retriever.ainvoke(composite_query)
-
-            fts_query_text = composite_query
-            if not fts_query_text:
-                fts_query_text = user_query
-            fts_docs = await _fts_search(fts_query_text, effective_k)
-            if fts_docs:
-                merged = _merge_docs(fts_docs, similarity_docs, effective_k)
-                expanded = await _expand_sibling_chunks(merged)
-                return _cap_per_source(expanded)
-            expanded = await _expand_sibling_chunks(similarity_docs)
+            merged = _merge_docs(
+                all_fts_docs, all_sim_docs, effective_k * len(queries_to_run)
+            )
+            expanded = await _expand_sibling_chunks(merged)
             return _cap_per_source(expanded)
 
         history_aware_retriever = RunnableLambda(_retrieve_with_fallback)
 
         # Prompt del Sistema (QA) - El que responde al usuario final
         # NOTA: {user_context} se inyecta dinamicamente con las preferencias del usuario
-        qa_prompt = QA_PROMPT_TEMPLATE
+        qa_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", self.db_prompts["rag_system_prompt"]),
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("human", "<user_query>{input}</user_query>"),
+            ]
+        )
 
         document_chain = create_stuff_documents_chain(llm, qa_prompt)
         rag_chain = create_retrieval_chain(history_aware_retriever, document_chain)
@@ -1101,12 +1220,6 @@ Adapta tu tono, formato y nivel de detalle segun estas preferencias.
                     user_id,
                 )
 
-            kh_user, user_key = await self.persistence.upsert_user_async(slack_user)
-
-            if not user_key:
-                logger.error("Failed to determine user_key")
-                return {}
-
             channel_id = slack_metadata.get("channel") or slack_metadata.get(
                 "event", {}
             ).get("channel")
@@ -1121,56 +1234,31 @@ Adapta tu tono, formato y nivel de detalle segun estas preferencias.
                 )
 
             atomic_fn = getattr(self.persistence, "save_interaction_atomic_async", None)
-            if callable(atomic_fn):
-                result = await atomic_fn(
-                    slack_user=slack_user,
-                    channel_id=channel_id,
-                    thread_ts=thread_ts,
-                    query=sanitized_query,
-                    output=sanitized_output,
+            if not callable(atomic_fn):
+                logger.error(
+                    "save_interaction_atomic_async is not available in persistence layer"
                 )
+                return {}
 
-                if result:
-                    logger.info(
-                        f"Interaction saved (atomic): user={user_id}, chunks={len(chunks_metadata)}"
-                    )
-                    result["chunks_count"] = len(chunks_metadata)
-                    return result
-
-            kh_conversation = await self.persistence.get_or_create_conversation_async(
-                user_key=user_key, channel_id=channel_id, thread_ts=thread_ts
-            )
-
-            query_saved = await self.persistence.save_message_async(
-                user_key=user_key,
+            result = await atomic_fn(
+                slack_user=slack_user,
                 channel_id=channel_id,
-                message_type="user_query",
-                content=sanitized_query,
                 thread_ts=thread_ts,
-                kh_conversation=kh_conversation,
+                query=sanitized_query,
+                output=sanitized_output,
             )
 
-            response_saved = await self.persistence.save_message_async(
-                user_key=user_key,
-                channel_id=channel_id,
-                message_type="bot_response",
-                content=sanitized_output,
-                thread_ts=thread_ts,
-                feedback=None,
-                kh_conversation=kh_conversation,
-            )
+            if result:
+                logger.info(
+                    f"Interaction saved (atomic): user={user_id}, chunks={len(chunks_metadata)}"
+                )
+                result["chunks_count"] = len(chunks_metadata)
+                return result
 
-            logger.info(
-                f"Interaction saved: user={user_id}, chunks={len(chunks_metadata)}"
+            logger.error(
+                f"Atomic interaction save returned empty result for user={user_id}"
             )
-
-            return {
-                "kh_user": kh_user,
-                "kh_conversation": kh_conversation,
-                "query_saved": query_saved,
-                "response_saved": response_saved,
-                "chunks_count": len(chunks_metadata),
-            }
+            return {}
 
         except Exception as e:
             logger.exception(f"Error saving interaction to database: {e}")

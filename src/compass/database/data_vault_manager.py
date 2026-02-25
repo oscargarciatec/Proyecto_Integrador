@@ -110,11 +110,7 @@ class DataVaultManager:
     @staticmethod
     def _clean_dict(data: Dict[str, Any]) -> Dict[str, Any]:
         """Elimina llaves con valores vacíos para evitar ruido en el contexto."""
-        return {
-            k: v
-            for k, v in data.items()
-            if v not in (None, "", [], {}, ())
-        }
+        return {k: v for k, v in data.items() if v not in (None, "", [], {}, ())}
 
     def _build_user_context_payload(self, slack_user: Dict[str, Any]) -> Dict[str, Any]:
         """Construye un payload rico en contexto para ax_user_context."""
@@ -218,10 +214,10 @@ class DataVaultManager:
                     INSERT INTO {self.schema}.sat_agents_data
                     (kh_agent, ct_valid_from_dt, ai_current_flag, ct_ingest_dt,
                      ax_src_system_datastore, ah_checksum, ax_name, ax_description,
-                     ax_url, aj_agent_definition, aj_priming, aj_agent_examples, ab_is_supervisor)
+                     ax_url, aj_agent_definition, ax_priming, aj_agent_examples, ab_is_supervisor)
                     VALUES (:kh_agent, :ct_valid_from_dt, :ai_current_flag, :ct_ingest_dt,
                             :ax_src_system, :ah_checksum, :ax_name, :ax_description,
-                            :ax_url, :aj_agent_definition, :aj_priming, :aj_agent_examples, :ab_is_supervisor)
+                            :ax_url, :aj_agent_definition, :ax_priming, :aj_agent_examples, :ab_is_supervisor)
                 """)
 
                 await conn.execute(
@@ -239,7 +235,7 @@ class DataVaultManager:
                         "aj_agent_definition": json.dumps(
                             self.agent_definition, ensure_ascii=False
                         ),
-                        "aj_priming": json.dumps({}),
+                        "ax_priming": None,
                         "aj_agent_examples": json.dumps({}),
                         "ab_is_supervisor": False,
                     },
@@ -256,7 +252,7 @@ class DataVaultManager:
     async def upsert_user_async(self, slack_user: Dict[str, Any]) -> tuple[bytes, str]:
         """
         Inserta o actualiza un usuario en hub_users y sat_compass_users_data (async).
-        
+
         WARNING: Logic duplicated in save_interaction_atomic_async.
         If you update SQL here, please update it there too.
         """
@@ -310,10 +306,7 @@ class DataVaultManager:
             if email and not slack_user.get("email"):
                 slack_user["email"] = email
 
-            job_title = (
-                slack_user.get("title")
-                or profile.get("title")
-            )
+            job_title = slack_user.get("title") or profile.get("title")
             user_context = self._build_user_context_payload(slack_user)
             user_data = {
                 "display_name": display_name,
@@ -339,7 +332,9 @@ class DataVaultManager:
                         SET ai_current_flag = 0
                         WHERE kh_user = :kh_user AND ai_current_flag = 1
                     """)
-                    await self._exec_async(update_old, {"kh_user": kh_user}, commit=True)
+                    await self._exec_async(
+                        update_old, {"kh_user": kh_user}, commit=True
+                    )
 
                 insert_sat = text(f"""
                     INSERT INTO {self.schema}.sat_compass_users_data 
@@ -464,7 +459,9 @@ class DataVaultManager:
                         conn, check_user_sat, {"kh_user": kh_user}, fetch=True
                     )
                     row = rows[0] if rows else None
-                    current_checksum = bytes(row[0]) if row and row[0] is not None else None
+                    current_checksum = (
+                        bytes(row[0]) if row and row[0] is not None else None
+                    )
 
                     if current_checksum != new_checksum:
                         update_old_user_sat = text(f"""
@@ -496,7 +493,9 @@ class DataVaultManager:
                                 "ax_src_system": self.src_system,
                                 "ah_checksum": new_checksum,
                                 "ax_display_nm": user_data["display_name"],
-                                "ax_user_context": json.dumps(user_context, ensure_ascii=False),
+                                "ax_user_context": json.dumps(
+                                    user_context, ensure_ascii=False
+                                ),
                                 "ax_job_title": user_data["job_title"],
                                 "ax_email": user_data["email"],
                             },
@@ -542,7 +541,9 @@ class DataVaultManager:
                         },
                     )
 
-                    async def insert_chat(message_type: str, content: str, feedback: bool | None):
+                    async def insert_chat(
+                        message_type: str, content: str, feedback: bool | None
+                    ):
                         chat_data = {"content": content, "type": message_type}
                         checksum = self._generate_checksum(chat_data)
                         now = datetime.now()
@@ -603,8 +604,10 @@ class DataVaultManager:
             SELECT 1 FROM {self.schema}.lnk_users_agents_conversation 
             WHERE kh_user_agent_conversation = :kh_link
         """)
-        link_exists = await self._exec_async(check_link, {"kh_link": kh_link}, fetch=True)
-        
+        link_exists = await self._exec_async(
+            check_link, {"kh_link": kh_link}, fetch=True
+        )
+
         if not link_exists:
             insert_link = text(f"""
                 INSERT INTO {self.schema}.lnk_users_agents_conversation 
@@ -636,15 +639,15 @@ class DataVaultManager:
         Si la estrategia es SessionBasedStrategy, usa versión async.
         """
         strategy = self.conversation_strategy
-        
+
         # Si es SessionBasedStrategy, usar versión async
-        if hasattr(strategy, 'get_business_key_async'):
+        if hasattr(strategy, "get_business_key_async"):
             return await strategy.get_business_key_async(
                 user_id=user_key,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
             )
-        
+
         # Para otras estrategias, usar versión sync (no hacen I/O)
         return strategy.get_business_key(
             user_id=user_key,
@@ -656,12 +659,14 @@ class DataVaultManager:
         self, user_key: str, channel_id: str, thread_ts: str = None
     ) -> bytes:
         """Obtiene o crea una conversación (async)."""
-        
+
         # WARNING: Insert logic duplicated in save_interaction_atomic_async.
         # If you update SQL here, please update it there too.
-        
+
         try:
-            conversation_bk = await self._get_conversation_bk_async(user_key, channel_id, thread_ts)
+            conversation_bk = await self._get_conversation_bk_async(
+                user_key, channel_id, thread_ts
+            )
             kh_conversation = self._generate_hash_key(conversation_bk)
 
             check_query = text(f"""
@@ -672,13 +677,13 @@ class DataVaultManager:
             result = await self._exec_async(
                 check_query, {"kh_conversation": kh_conversation}, fetch=True
             )
-            
+
             # Preparar datos del link (siempre necesarios)
             kh_user = self._generate_hash_key(user_key)
             kh_agent = self._generate_hash_key(self.agent_id)
             link_bk = f"{user_key}_{self.agent_id}_{conversation_bk}"
             kh_link = self._generate_hash_key(link_bk)
-            
+
             if result:
                 # Conversación existe, pero verificar si el link existe
                 await self._ensure_link_exists_async(
@@ -746,17 +751,19 @@ class DataVaultManager:
         kh_conversation: bytes = None,
     ) -> bool:
         """Guarda un mensaje en sat_compass_current_chat y sat_compass_historical_chats (async)."""
-        
+
         # WARNING: Insert logic duplicated in save_interaction_atomic_async.
         # If you update SQL here, please update it there too.
-        
+
         try:
             if kh_conversation is None:
                 kh_conversation = await self.get_or_create_conversation_async(
                     user_key, channel_id, thread_ts
                 )
 
-            conversation_bk = await self._get_conversation_bk_async(user_key, channel_id, thread_ts)
+            conversation_bk = await self._get_conversation_bk_async(
+                user_key, channel_id, thread_ts
+            )
             link_bk = f"{user_key}_{self.agent_id}_{conversation_bk}"
             kh_link = self._generate_hash_key(link_bk)
 
@@ -785,8 +792,6 @@ class DataVaultManager:
                         :ax_src_system, :ah_checksum, :ax_message_type,
                         :ab_feedback, :ax_content, :aj_attachments)
             """)
-            await self._exec_async(insert_current, params, commit=True)
-
             insert_historical = text(f"""
                 INSERT INTO {self.schema}.sat_compass_historical_chats 
                 (kh_user_agent_conversation, ct_valid_from_dt, ct_ingest_dt, 
@@ -796,7 +801,11 @@ class DataVaultManager:
                         :ax_src_system, :ah_checksum, :ax_message_type,
                         :ab_feedback, :ax_content, :aj_attachments)
             """)
-            await self._exec_async(insert_historical, params, commit=True)
+
+            async with self.engine._pool.connect() as conn:
+                async with conn.begin():
+                    await self._exec_on_conn_async(conn, insert_current, params)
+                    await self._exec_on_conn_async(conn, insert_historical, params)
 
             logger.info(f"Message saved to compass tables: {message_type}")
             return True
@@ -847,7 +856,9 @@ class DataVaultManager:
     ) -> bool:
         """Actualiza el último mensaje con feedback en ambas tablas (async)."""
         try:
-            conversation_bk = await self._get_conversation_bk_async(user_key, channel_id, thread_ts)
+            conversation_bk = await self._get_conversation_bk_async(
+                user_key, channel_id, thread_ts
+            )
             link_bk = f"{user_key}_{self.agent_id}_{conversation_bk}"
             kh_link = self._generate_hash_key(link_bk)
 
@@ -905,7 +916,9 @@ class DataVaultManager:
     ) -> List[Dict]:
         """Obtiene historial de mensajes desde sat_compass_current_chat (async)."""
         try:
-            conversation_bk = await self._get_conversation_bk_async(user_key, channel_id, thread_ts)
+            conversation_bk = await self._get_conversation_bk_async(
+                user_key, channel_id, thread_ts
+            )
             link_bk = f"{user_key}_{self.agent_id}_{conversation_bk}"
             kh_link = self._generate_hash_key(link_bk)
 
@@ -921,7 +934,12 @@ class DataVaultManager:
                 LIMIT :limit
             """)
 
-            rows = await self._exec_async(query, {"kh_link": kh_link, "limit": limit}, fetch=True) or []
+            rows = (
+                await self._exec_async(
+                    query, {"kh_link": kh_link, "limit": limit}, fetch=True
+                )
+                or []
+            )
             messages = [
                 {
                     "message_type": row[0],

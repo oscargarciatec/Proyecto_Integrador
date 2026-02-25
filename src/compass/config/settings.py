@@ -26,6 +26,8 @@ class ChatbotSettings:
     chatbot_logs_path: str
     llm_model_name: str
     embedding_model_name: str
+    embedding_vector_dimension: int
+    contextualize_model_name: str  # Modelo para contextualización RAG
     db_schema_name: str
     vector_column_name: str
     vertex_ai_project_id: str
@@ -167,7 +169,30 @@ class ChatbotSettings:
         object.__setattr__(
             self,
             "embedding_model_name",
-            get_conf("EMBEDDING_MODEL_NAME", "Model", "embedding_model_name"),
+            os.environ.get("EMBEDDING_MODEL_NAME")
+            or os.environ.get("EMBEDDING_MODEL")
+            or get_conf("EMBEDDING_MODEL_NAME", "Model", "embedding_model_name"),
+        )
+        embedding_dim = get_conf(
+            "EMBEDDING_VECTOR_DIMENSION",
+            "Model",
+            "embedding_vector_dimension",
+            "768",
+        )
+        object.__setattr__(
+            self,
+            "embedding_vector_dimension",
+            int(embedding_dim),
+        )
+        object.__setattr__(
+            self,
+            "contextualize_model_name",
+            get_conf(
+                "CONTEXTUALIZE_MODEL_NAME",
+                "Model",
+                "contextualize_model_name",
+                "gemini-2.5-flash-lite",  # Default: modelo rápido para contextualización
+            ),
         )
 
         # Vertex AI Project
@@ -175,7 +200,7 @@ class ChatbotSettings:
         if not vertex_project:
             try:
                 vertex_project = config["Model"].get("vertex_ai_project_id")
-            except:
+            except Exception:
                 pass
         if not vertex_project:
             vertex_project = self.gcp_project_id
@@ -186,7 +211,7 @@ class ChatbotSettings:
         if not vertex_region:
             try:
                 vertex_region = config["Model"].get("vertex_ai_region", self.db_region)
-            except:
+            except Exception:
                 vertex_region = self.db_region
         object.__setattr__(self, "vertex_ai_region", vertex_region)
 
@@ -198,7 +223,7 @@ class ChatbotSettings:
         )
 
         # Debug logging
-        print(f"--- Configuration Loaded ---")
+        print("--- Configuration Loaded ---")
         print(f"Project ID: {self.gcp_project_id}")
         print(f"Region: {self.db_region}")
         print(f"Cluster: {self.db_cluster}")
@@ -207,7 +232,7 @@ class ChatbotSettings:
         print(f"IP Type: {self.db_ip_type}")
         print(f"DB Host IP: {self.db_host_ip}")
         print(f"Vertex Project: {self.vertex_ai_project_id}")
-        print(f"----------------------------")
+        print("----------------------------")
 
 
 def load_settings() -> ChatbotSettings:
@@ -224,6 +249,8 @@ def load_settings() -> ChatbotSettings:
         k_sim_search_num=0,
         llm_model_name="",
         embedding_model_name="",
+        embedding_vector_dimension=768,
+        contextualize_model_name="",
         db_schema_name="",
         vector_column_name="",
         vertex_ai_project_id="",
