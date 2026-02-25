@@ -1,0 +1,29 @@
+/* src/index.css */
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Poppins:wght@600;700&family=Work+Sans:wght@400;700&display=swap");
+
+@import "tailwindcss";
+
+@theme {
+  /* --- Colores de Marca --- */
+  --color-brand-primary: #61b5cc; /* 50% */
+  --color-brand-orange: #e46a2c; /* 15% */
+  --color-brand-white: #ffffff; /* 10% */
+  --color-brand-dark: #0d0d0d; /* 5% */
+  --color-brand-purple: #4e0acf; /* 10% (5%+5%) */
+
+  /* --- Tipografías --- */
+  --font-montserrat: "Montserrat", sans-serif;
+  --font-poppins: "Poppins", sans-serif;
+  --font-work-sans: "Work Sans", sans-serif;
+}
+
+/* Aplicación global sugerida */
+body {
+  @apply font-work-sans text-brand-dark bg-gray-50;
+}
+
+h1,
+h2,
+h3 {
+  @apply font-montserrat font-bold;
+}

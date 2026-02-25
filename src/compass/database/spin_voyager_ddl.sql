@@ -553,13 +553,13 @@ CREATE TABLE multiagent_rag_model.sat_knowledge
 	ax_src_system_datastore VARCHAR  NULL ,
 	ah_checksum          BYTEA  NOT NULL ,
 	ax_content           VARCHAR  NULL ,
-	aa_embedding         VECTOR(768)  NULL,
+	aa_embedding         VECTOR(1536)  NULL,
 	aa_fts_vector	   TSVECTOR  NULL ,
 	PRIMARY KEY (kh_knowledge, ax_sub_sequence, ct_valid_from_dt)
 ) ;
 
 ALTER TABLE multiagent_rag_model.sat_knowledge
-ADD COLUMN ts_vector tsvector
+ADD COLUMN aa_ts_vector tsvector
 GENERATED ALWAYS AS (to_tsvector('spanish_unaccent', ax_content)) STORED;
 -- Crear indice
 CREATE INDEX idx_sat_knowledge_ts_vector
@@ -878,7 +878,7 @@ $$ LANGUAGE plpgsql;
 --
 -- Name: sat_knowledge_vector_update_trigger; Type: TRIGGER; Schema: multiagent_rag_model;
 --
-CREATE TRIGGER sat_knowledge_vector_update_trigger
+CREATE TRIGGER multiagent_rag_model.sat_knowledge_vector_update_trigger
 BEFORE INSERT ON multiagent_rag_model.sat_knowledge
 FOR EACH ROW EXECUTE FUNCTION multiagent_rag_model.update_fts_vector();
 
