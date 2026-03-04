@@ -1,13 +1,12 @@
 import { useApi } from "../hooks/useApi";
 import { TimeFilter } from "../ui/TimeFilter";
 import { Users, Crown, MessageCircle, MessageCircleHeart } from "lucide-react";
-import { useState } from "react";
 import { KpiCard } from "../ui/KpiCard";
 import { ChartContainer } from "../ui/ChartContainer";
 import { TrendChart } from "../components/TrendChart";
+import { theme } from "../styles/theme";
 
-const Home = () => {
-  const [days, setDays] = useState(7);
+const Home = ({ days, setDays }) => {
   const { data: stats } = useApi(`/api/dashboard/stats?days=${days}`);
   const { data: trend } = useApi(`/api/dashboard/trend?days=${days}`);
 
@@ -31,6 +30,13 @@ const Home = () => {
       {/* Grid de KPIs Reusables */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <KpiCard
+          title="Usuarios Históricos"
+          value={stats?.total_users || 0}
+          variant="primary"
+        >
+          <Users className="text-brand-primary/40" size={24} />
+        </KpiCard>
+        <KpiCard
           title="Conversaciones"
           value={stats?.total_conversations}
           variant="primary"
@@ -39,7 +45,7 @@ const Home = () => {
         </KpiCard>
 
         <KpiCard
-          title="Feedback"
+          title="% Feedback Positivo"
           value={stats?.feedback_percentage + "%"}
           variant="primary"
         >
@@ -47,7 +53,7 @@ const Home = () => {
         </KpiCard>
 
         <KpiCard
-          title="Usuarios Activos"
+          title="Usuarios Activos en el periodo"
           value={stats?.active_users}
           variant="purple"
         >
@@ -56,14 +62,6 @@ const Home = () => {
 
         <KpiCard title="Top User" value={stats?.top_user} variant="orange">
           <Crown className="text-brand-orange/40" size={24} />
-        </KpiCard>
-
-        <KpiCard
-          title="Tasa de Fallback"
-          value={stats?.fallback_rate}
-          variant="primary"
-        >
-          <div className="text-xs font-bold text-green-500">Saludable</div>
         </KpiCard>
       </div>
       {/* Gráfica Reusable */}

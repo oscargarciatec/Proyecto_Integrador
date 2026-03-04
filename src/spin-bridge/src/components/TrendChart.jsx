@@ -41,7 +41,7 @@ export const TrendChart = ({ data }) => {
             stroke="#f1f5f9"
           />
           <XAxis
-            dataKey="date"
+            dataKey="fecha"
             axisLine={false}
             tickLine={false}
             tick={{ fill: "#64748b", fontSize: 10, fontFamily: "Poppins" }}
@@ -61,7 +61,7 @@ export const TrendChart = ({ data }) => {
           />
           <Area
             type="monotone"
-            dataKey="conversations"
+            dataKey="mensajes"
             stroke="#61B5CC"
             strokeWidth={3}
             fill="url(#colorPrimary)"

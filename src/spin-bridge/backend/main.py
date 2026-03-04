@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_, and_, distinct, join, label, desc, asc
+from sqlalchemy import func, or_, and_, distinct, join, label, desc, asc, update, text
 from database import get_db
-from models import HubConversation, SatHistoricalChats, LnkUserAgentsConversation, SatUsersData
+from models import HubConversation, SatHistoricalChats, LnkUserAgentsConversation, SatUsersData, SatAgentsData, HubUser
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
+import hashlib
+import json
 
 app = FastAPI()
 
@@ -49,46 +51,58 @@ def get_dashboard_stats(days: int=7, db: Session = Depends(get_db)):
     .order_by(func.count(SatHistoricalChats.kh_user_agent_conversation).desc())\
     .limit(1).scalar() or ""
 
+    # 5. Usuarios Totales
+    total_users = db.query(
+        func.count(distinct(HubUser.kh_user))).filter(HubUser.ai_src_system == 31).scalar() or 0
+
     return {
         "total_conversations": total_convs,
         "feedback_percentage": round(feedback_pct, 2),
         "active_users": active_users,
         "top_user": top_user,
         "avg_response_time": "1.2s", # Este vendría de una métrica de performance
-        "fallback_rate": "4.2%"
+        "fallback_rate": "4.2%",
+        "total_users": total_users
     }
 
 @app.get("/api/dashboard/trend")
 def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
-    # Usamos utcnow para consistencia con AlloyDB
-    start_date = datetime.utcnow() - timedelta(days=days)
-    
-    trend_query = db.query(
-        func.date(SatHistoricalChats.ct_valid_from_dt).label('fecha'), # Agregamos label
-        func.count(SatHistoricalChats.kh_user_agent_conversation).label('total') # Agregamos label
-    ).filter(
-        SatHistoricalChats.ct_valid_from_dt >= start_date, 
-        SatHistoricalChats.ax_message_type == "user_query"
-    ).group_by(
-        func.date(SatHistoricalChats.ct_valid_from_dt)
-    ).order_by(
-        func.date(SatHistoricalChats.ct_valid_from_dt)
-    ).all()
+    # SQL nativo para generar los huecos y convertir zona horaria
+    query = text("""
+        WITH date_range AS (
+            -- Obtenemos el 'Hoy' real de CDMX para iniciar la serie
+            SELECT ( (CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date - (i || ' day')::interval)::date as day
+            FROM generate_series(0, :days - 1) i
+        ),
+        counts AS (
+            SELECT 
+                (ct_valid_from_dt AT TIME ZONE 'America/Mexico_City')::date as day,
+                COUNT(kh_user_agent_conversation) as total
+            FROM multiagent_rag_model.sat_compass_historical_chats
+            WHERE ax_message_type = 'user_query'
+              AND ct_valid_from_dt >= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date - (:days || ' day')::interval
+            GROUP BY 1
+        )
+        SELECT 
+            dr.day,
+            COALESCE(c.total, 0) as mensajes
+        FROM date_range dr
+        LEFT JOIN counts c ON dr.day = c.day
+        ORDER BY dr.day ASC
+    """)
+
+    result_set = db.execute(query, {"days": days})
 
     result = []
-    for row in trend_query:
-        # Al usar .label(), ahora sí puedes usar row.fecha
-        fecha_obj = row.fecha 
-        fecha_str = fecha_obj.strftime("%d %b") if hasattr(fecha_obj, 'strftime') else str(fecha_obj)
-        
+    for row in result_set:
+        # Formateamos la fecha para el Frontend (ej: "03 Mar")
+        fecha_str = row.day.strftime("%d %b")
         result.append({
-            "date": fecha_str,
-            "conversations": row.total
+            "fecha": fecha_str,
+            "mensajes": row.mensajes
         })
     
     return result
-
-from sqlalchemy import desc, and_
 
 @app.get("/api/conversations/negative/{kh_conv}")
 def get_conversation_detail(kh_conv: str, db: Session = Depends(get_db)):
@@ -118,7 +132,7 @@ def get_conversation_detail(kh_conv: str, db: Session = Depends(get_db)):
         {
             "type": msg.ax_message_type,      # 'user_query' o 'bot_response'
             "content": msg.ax_content,
-            "timestamp": msg.ct_valid_from_dt.strftime("%H:%M"),
+            "timestamp": msg.ct_valid_from_dt.strftime("%d/%m/%Y %H:%M"),
             "feedback": msg.ab_feedback,
             "is_bot": msg.ax_message_type == "bot_response",
             "comment": msg.comment
@@ -174,3 +188,106 @@ def get_negative_conversations(
         # Esto imprimirá el error real en tu terminal negra (Uvicorn)
         print(f"DEBUG ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agents/current")
+def get_current_agent(db: Session = Depends(get_db)):
+    # Buscamos el registro activo (ai_current_flag = 1)
+    agent = db.query(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1, SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass").first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="No hay agente activo configurado")
+    
+    return {
+        "kh_agent": agent.kh_agent.hex(),
+        "name": agent.ax_name,
+        "description": agent.ax_description,
+        "priming": agent.ax_priming,
+        "agent_definition": agent.aj_agent_definition,
+        "agent_examples": agent.aj_agent_examples,
+        "is_supervisor": agent.ab_is_supervisor,
+        "url": agent.ax_url
+    }
+
+@app.post("/api/agents/update")
+async def update_agent_prompt(data: dict, db: Session = Depends(get_db)):
+    try:
+        # 1. Extraer datos del payload
+        name = data.get('name')
+        description = data.get('description')
+        priming = data.get('priming')
+        url = data.get('url')
+        agent_def = data.get('agent_definition', {})
+        agent_ex = data.get('agent_examples', {})
+        is_sup = data.get('is_supervisor', False)
+
+        # 2. Calcular el NUEVO Checksum
+        def prepare_for_hash(val):
+            if isinstance(val, (dict, list)):
+                return json.dumps(val, sort_keys=True)
+            return str(val) if val is not None else ""
+
+        raw_string = f"{prepare_for_hash(name)}|{prepare_for_hash(description)}|{prepare_for_hash(url)}|{prepare_for_hash(priming)}|{prepare_for_hash(agent_def)}|{prepare_for_hash(agent_ex)}|{prepare_for_hash(is_sup)}"
+        
+        new_checksum_hex = hashlib.sha1(raw_string.encode('utf-8')).hexdigest()
+        new_checksum_bytes = bytes.fromhex(new_checksum_hex)
+
+        # 3. VALIDACIÓN: Comparar con el registro activo actual
+        current_agent = db.query(SatAgentsData).filter(
+            SatAgentsData.ai_current_flag == 1,
+            SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
+        ).first()
+
+        if current_agent and current_agent.ah_checksum == new_checksum_bytes:
+            # Si los hashes son iguales, detenemos el proceso
+            raise HTTPException(
+                status_code=400, 
+                detail="No se detectaron cambios en la configuración. La información es idéntica."
+            )
+
+        # 4. Si el checksum es diferente, procedemos con la actualización
+        db.query(SatAgentsData).filter(
+            SatAgentsData.ai_current_flag == 1,
+            SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
+        ).update({"ai_current_flag": 0})
+
+        new_version = SatAgentsData(
+            kh_agent=bytes.fromhex(data.get('kh_agent')),
+            ct_valid_from_dt=datetime.utcnow(),
+            ct_ingest_dt=datetime.utcnow(),
+            ah_checksum=new_checksum_bytes,
+            ax_src_system_datastore="gen-ai spin-compass",
+            ai_current_flag=1,
+            ax_name=name,
+            ax_description=description,
+            aj_agent_definition=agent_def,
+            ax_priming=priming,
+            aj_agent_examples=agent_ex,
+            ab_is_supervisor=is_sup,
+            ax_url=url
+        )
+        
+        db.add(new_version)
+        db.commit()
+        
+        return {"status": "success", "checksum": new_checksum_hex}
+        
+    except HTTPException as he:
+        raise he # Re-lanzamos el error de validación
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agents/history")
+def get_agent_history(db: Session = Depends(get_db)):
+    # Buscamos las 3 versiones anteriores más recientes
+    history = db.query(SatAgentsData).filter(
+        SatAgentsData.ai_current_flag == 0,
+        SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
+    ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3).all()
+
+    return [
+        {
+            "date": h.ct_valid_from_dt.strftime("%d/%m/%y %H:%M"),
+            "description": h.ax_description,
+            "priming": h.ax_priming
+        } for h in history
+    ]
