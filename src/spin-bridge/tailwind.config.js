@@ -1,15 +1,19 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: "class", // <--- Esta es la clave
+  // 1. ESTA ES LA LÍNEA CLAVE. Sin esto, 'dark:' no funciona con clases.
+  darkMode: "class",
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
         brand: {
           primary: "#00C2CB",
-          orange: "#FF6F00",
-          dark: "#1E293B", // Color para el texto en modo claro o fondos en modo oscuro
+          dark: "#1E293B",
         },
+      },
+      fontFamily: {
+        montserrat: ["Montserrat", "sans-serif"],
+        poppins: ["Poppins", "sans-serif"],
       },
     },
   },

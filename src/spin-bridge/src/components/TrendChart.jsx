@@ -1,3 +1,4 @@
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   AreaChart,
   Area,
@@ -5,70 +6,153 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
 } from "recharts";
 
-export const TrendChart = ({ data }) => {
-  // 1. Verificación inmediata de datos
-  if (!data || data.length === 0) {
+// 1. Agregamos isDark a las props para que React detecte el cambio de tema
+const CustomTooltip = ({ active, payload, label }) => {
+  // Verificamos si el modo oscuro está activo en el HTML directamente para asegurar precisión
+  const isDarkInHtml =
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark");
+
+  if (active && payload && payload.length) {
     return (
-      <div className="flex items-center justify-center h-[350px] text-slate-400 font-work-sans italic">
-        Esperando datos de la Control Tower...
+      <div
+        className={`${
+          isDarkInHtml
+            ? "bg-slate-800 border-slate-700"
+            : "bg-white border-slate-200"
+        } border p-3 rounded-xl shadow-xl transition-colors duration-300`}
+      >
+        <p
+          className={`text-[10px] font-bold uppercase mb-1 font-montserrat text-left ${
+            isDarkInHtml ? "text-slate-100" : "text-slate-400"
+          }`}
+        >
+          {label}
+        </p>
+        <p
+          className={`text-sm font-bold font-montserrat ${
+            isDarkInHtml ? "text-white" : "text-slate-900"
+          }`}
+        >
+          <span className="text-[#00C2CB]">●</span> {payload[0].value} mensajes
+        </p>
       </div>
     );
   }
+  return null;
+};
+
+export const TrendChart = React.memo(({ data }) => {
+  const [isDark, setIsDark] = useState(() =>
+    typeof window !== "undefined"
+      ? document.documentElement.classList.contains("dark")
+      : false,
+  );
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const isCurrentlyDark =
+        document.documentElement.classList.contains("dark");
+      setIsDark((prev) => (prev !== isCurrentlyDark ? isCurrentlyDark : prev));
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  const containerRef = useCallback((node) => {
+    if (node !== null) {
+      const measure = () => setWidth(node.offsetWidth);
+      measure();
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+  }, []);
+
+  const colors = useMemo(
+    () => ({
+      grid: isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.05)",
+      text: isDark ? "#ffffff" : "#94A3B8",
+      line: "#00C2CB",
+      fill: isDark ? "#1e293b" : "#ffffff",
+    }),
+    [isDark],
+  );
+
+  if (!data || data.length === 0) return null;
 
   return (
-    <div className="w-full" style={{ height: "350px" }}>
-      {/* CLAVE MAESTRA: Usamos height={350} (número) en lugar de "100%".
-        Esto obliga a Recharts a renderizar con una medida fija 
-        mientras el CSS del Grid termina de acomodarse.
-      */}
-      <ResponsiveContainer width="100%" height={350}>
+    <div
+      ref={containerRef}
+      className="w-full h-[350px] relative overflow-hidden flex justify-center"
+      style={{ backgroundColor: colors.fill }}
+      key={isDark ? "dark" : "light"}
+    >
+      {width > 0 && (
         <AreaChart
+          width={width}
+          height={350}
           data={data}
-          margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+          margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+          fill={colors.fill}
         >
           <defs>
-            <linearGradient id="colorPrimary" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#61B5CC" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#61B5CC" stopOpacity={0} />
+            <linearGradient id="colorBrand" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={colors.line} stopOpacity={0.2} />
+              <stop offset="95%" stopColor={colors.line} stopOpacity={0} />
             </linearGradient>
           </defs>
+
           <CartesianGrid
-            strokeDasharray="3 3"
+            strokeDasharray="4 4"
             vertical={false}
-            stroke="#f1f5f9"
+            stroke={colors.grid}
+            fill={colors.fill}
           />
+
           <XAxis
             dataKey="fecha"
             axisLine={false}
             tickLine={false}
-            tick={{ fill: "#64748b", fontSize: 10, fontFamily: "Poppins" }}
+            tick={{ fill: colors.text, fontSize: 10, fontFamily: "Montserrat" }}
+            dy={10}
           />
+
           <YAxis
             axisLine={false}
             tickLine={false}
-            tick={{ fill: "#64748b", fontSize: 10, fontFamily: "Poppins" }}
+            tick={{ fill: colors.text, fontSize: 10, fontFamily: "Montserrat" }}
           />
+
+          {/* PASAMOS isDark AQUÍ PARA NOTIFICAR AL TOOLTIP */}
           <Tooltip
-            contentStyle={{
-              borderRadius: "12px",
-              border: "none",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-              fontFamily: "Montserrat",
+            content={<CustomTooltip />}
+            // 2. IMPORTANTE: Esto desactiva el cache interno de renderizado de Recharts para el tooltip
+            isAnimationActive={false}
+            // 3. Forzamos que el cursor (la línea vertical) también cambie
+            cursor={{
+              stroke: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.1)",
+              strokeWidth: 1,
             }}
           />
+
           <Area
             type="monotone"
             dataKey="mensajes"
-            stroke="#61B5CC"
-            strokeWidth={3}
-            fill="url(#colorPrimary)"
-            isAnimationActive={false} // Desactivar animación ayuda a la estabilidad inicial
+            stroke={colors.line}
+            strokeWidth={2.5}
+            fill="url(#colorBrand)"
+            isAnimationActive={true}
+            animationDuration={300}
           />
         </AreaChart>
-      </ResponsiveContainer>
+      )}
     </div>
   );
-};
+});

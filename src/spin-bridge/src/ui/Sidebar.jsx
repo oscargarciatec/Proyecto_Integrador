@@ -1,63 +1,68 @@
+import React from "react";
 import { MessageSquare, Settings, LayoutDashboard } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
-export default function Sidebar() {
+const Sidebar = React.memo(() => {
   const location = useLocation();
+  const activePath = location.pathname;
 
-  // Función para determinar si la ruta es la activa
-  const isActive = (path) => location.pathname === path;
-
-  // Estilos base para los botones
   const navItemStyles =
-    "flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-200 group";
+    "flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group font-bold text-sm";
 
-  // Estilo cuando NO está seleccionado
+  // Agregamos dark:hover para que el hover se vea bien en oscuro
   const inactiveStyles =
-    "text-slate-500 hover:bg-slate-50 hover:text-brand-primary";
+    "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 hover:text-brand-primary dark:hover:text-brand-primary";
 
-  // Estilo cuando SÍ está seleccionado
   const activeStyles =
     "bg-brand-primary text-white shadow-lg shadow-brand-primary/20 scale-[1.02]";
 
   return (
-    <div className="w-64 h-screen bg-white text-brand-dark p-6 flex flex-col fixed border-r border-slate-100 font-montserrat shadow-sm">
-      {/* Logo Section */}
-      <div className="flex items-center gap-2 mb-12 px-2">
-        <div className="w-8 h-8 bg-brand-primary rounded-lg flex items-center justify-center text-white font-bold">
-          SB
-        </div>
-        <h1 className="text-xl font-black text-brand-primary tracking-tight">
-          Spin Bridge
-        </h1>
+    <div className="w-68 h-screen bg-white dark:bg-slate-900 text-brand-dark dark:text-slate-100 p-6 flex flex-col fixed border-r border-slate-100 dark:border-slate-800 font-montserrat shadow-sm transition-colors duration-300">
+      <div className="flex items-center justify-center mb-12 px-2">
+        <Link to="/" className="block">
+          {/* Logo para Modo Claro: Se oculta cuando hay clase .dark */}
+          <img
+            src="/logo-light.png"
+            alt="AI AgentSphere Logo"
+            className="h-30 w-auto dark:hidden object-contain"
+          />
+          {/* Logo para Modo Oscuro: Solo se muestra cuando hay clase .dark */}
+          <img
+            src="/logo-light.png"
+            alt="AI AgentSphere Logo"
+            className="h-30 w-auto hidden dark:block object-contain"
+          />
+        </Link>
       </div>
-      <nav className="flex flex-col gap-3 font-bold text-sm">
+
+      <nav className="flex flex-col gap-3">
         {/* Dashboard */}
         <Link
           to="/"
-          className={`${navItemStyles} ${isActive("/") ? activeStyles : inactiveStyles}`}
+          className={`${navItemStyles} ${activePath === "/" ? activeStyles : inactiveStyles}`}
         >
           <LayoutDashboard
             size={20}
             className={
-              isActive("/")
+              activePath === "/"
                 ? "text-white"
-                : "text-slate-400 group-hover:text-brand-primary"
+                : "text-slate-400 dark:text-slate-500 group-hover:text-brand-primary"
             }
           />
           <span>Dashboard</span>
         </Link>
 
-        {/* Análisis de conversaciones - Texto corregido */}
+        {/* Análisis de conversaciones */}
         <Link
           to="/chats"
-          className={`${navItemStyles} ${isActive("/chats") ? activeStyles : inactiveStyles}`}
+          className={`${navItemStyles} ${activePath === "/chats" ? activeStyles : inactiveStyles}`}
         >
           <MessageSquare
             size={20}
             className={
-              isActive("/chats")
+              activePath === "/chats"
                 ? "text-white"
-                : "text-slate-400 group-hover:text-brand-primary"
+                : "text-slate-400 dark:text-slate-500 group-hover:text-brand-primary"
             }
           />
           <span className="leading-tight">
@@ -68,25 +73,27 @@ export default function Sidebar() {
         {/* Configuración */}
         <Link
           to="/config"
-          className={`${navItemStyles} ${isActive("/config") ? activeStyles : inactiveStyles}`}
+          className={`${navItemStyles} ${activePath === "/config" ? activeStyles : inactiveStyles}`}
         >
           <Settings
             size={20}
             className={
-              isActive("/config")
+              activePath === "/config"
                 ? "text-white"
-                : "text-slate-400 group-hover:text-brand-primary"
+                : "text-slate-400 dark:text-slate-500 group-hover:text-brand-primary"
             }
           />
-          <span>Configuración del Agente</span>
+          <span>Configuración</span>
         </Link>
       </nav>
-      {/* Footer del Sidebar (Opcional) */}
-      <div className="mt-auto p-4 bg-slate-50 rounded-2xl border border-slate-100">
-        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest text-center">
-          Developed by AI Products Chapter. 2026
+
+      <div className="mt-auto p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors">
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-widest text-center">
+          Developed by AI Products <br /> Chapter. 2026
         </p>
       </div>
     </div>
   );
-}
+});
+
+export default Sidebar;

@@ -71,16 +71,16 @@ def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
     query = text("""
         WITH date_range AS (
             -- Obtenemos el 'Hoy' real de CDMX para iniciar la serie
-            SELECT ( (CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date - (i || ' day')::interval)::date as day
+            SELECT ( (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date - (i || ' day')::interval)::date as day
             FROM generate_series(0, :days - 1) i
         ),
         counts AS (
             SELECT 
-                (ct_valid_from_dt AT TIME ZONE 'America/Mexico_City')::date as day,
+                (ct_valid_from_dt AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date as day,
                 COUNT(kh_user_agent_conversation) as total
             FROM multiagent_rag_model.sat_compass_historical_chats
             WHERE ax_message_type = 'user_query'
-              AND ct_valid_from_dt >= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date - (:days || ' day')::interval
+              AND ct_valid_from_dt >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date - (:days || ' day')::interval
             GROUP BY 1
         )
         SELECT 

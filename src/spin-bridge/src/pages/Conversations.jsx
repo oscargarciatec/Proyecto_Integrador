@@ -112,10 +112,10 @@ const Conversations = ({ days, setDays }) => {
 
   return (
     <div className="p-8 space-y-4">
-      <header className="flex justify-between items-end bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+      <header className="flex justify-between items-end bg-white dark:bg-brand-primary/10 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700">
         <div className="space-y-2">
           <div>
-            <h2 className="text-3xl font-montserrat font-bold text-brand-dark tracking-tight">
+            <h2 className="text-3xl font-montserrat font-bold text-brand-dark dark:text-slate-300 tracking-tight">
               Auditoría de Feedback
             </h2>
             <p className="text-brand-orange font-work-sans font-bold text-sm">
@@ -127,8 +127,11 @@ const Conversations = ({ days, setDays }) => {
 
         <div className="flex items-center gap-4">
           <input
+            id="email-filter"
+            name="email"
+            autoComplete="email"
             placeholder="Filtrar por correo..."
-            className="p-3 border border-slate-200 rounded-xl font-work-sans text-sm outline-none focus:ring-2 focus:ring-brand-primary w-72 bg-slate-50 transition-all"
+            className="p-3 border border-slate-200 dark:border-slate-700 dark:text-slate-100 rounded-xl font-work-sans text-sm outline-none focus:ring-2 focus:ring-brand-primary w-72 bg-slate-50 dark:bg-slate-800/40  transition-all"
             onChange={(e) => setFilterEmail(e.target.value)}
           />
         </div>

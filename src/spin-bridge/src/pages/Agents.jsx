@@ -88,18 +88,18 @@ const Agents = () => {
   return (
     <div className="p-8 max-w-6xl mx-auto space-y-6">
       {/* Header con Descripción Editable */}
-      <header className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex justify-between items-center">
+      <header className="bg-white dark:bg-brand-primary/10 p-8 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-700 flex justify-between items-center">
         <div className="flex gap-6 items-center">
-          <div className="w-16 h-16 bg-brand-primary/10 rounded-2xl flex items-center justify-center text-brand-primary">
+          <div className="w-16 h-16 bg-brand-primary/10 dark:bg-brand-primary/5 rounded-2xl flex items-center justify-center text-brand-primary dark:text-slate-300">
             <Activity size={32} />
           </div>
           <div>
             <div className="flex items-center gap-3">
-              <h2 className="text-3xl font-montserrat font-bold text-brand-dark">
+              <h2 className="text-3xl font-montserrat font-bold text-brand-dark dark:text-slate-300">
                 {agent.name}
               </h2>
             </div>
-            <p className="text-slate-500 font-work-sans mt-1">
+            <p className="text-slate-500 font-work-sans mt-1 dark:text-slate-400">
               {agent.description || "Sin descripción"}
             </p>
           </div>
@@ -107,7 +107,7 @@ const Agents = () => {
 
         <button
           onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 bg-brand-orange text-white px-6 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg"
+          className="flex items-center gap-2 bg-brand-orange text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-dark/70 dark:hover:bg-brand-orange/80 transition-all shadow-lg"
         >
           <Edit3 size={18} /> Editar Agente
         </button>
@@ -116,12 +116,12 @@ const Agents = () => {
       {/* VISTA PREVIA DEL PROMPT ACTUAL*/}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <section className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-400 mb-4 uppercase flex items-center gap-2">
+          <section className="bg-white dark:bg-brand-primary/10 p-6 rounded-3xl border border-slate-100 dark:border-slate-700 shadow-sm">
+            <h3 className="text-sm font-bold text-brand-dark dark:text-slate-300 mb-4 uppercase flex items-center gap-2">
               <Terminal size={16} /> System Prompt Actual
             </h3>
-            <div className="bg-brand-dark/50 p-6 rounded-2xl border border-slate-100 max-h-96 overflow-y-auto">
-              <p className="font-mono text-sm text-slate-100 whitespace-pre-wrap leading-relaxed italic">
+            <div className="bg-brand-dark/5 dark:bg-brand-dark/50 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 max-h-96 overflow-y-auto">
+              <p className="font-mono text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed italic">
                 {agent.priming}
               </p>
             </div>
@@ -130,12 +130,15 @@ const Agents = () => {
 
         {/* Panel Lateral */}
         <aside className="space-y-6">
-          <div className="bg-brand-primary/5 p-6 rounded-2xl border border-brand-primary/10">
-            <h4 className="font-montserrat font-bold text-brand-dark text-sm mb-3 flex items-center gap-2">
-              <ShieldAlert size={16} className="text-brand-primary" /> Tips para
-              definir un buen prompt
+          <div className="bg-brand-primary/5 dark:bg-brand-primary/30 p-6 rounded-2xl border border-brand-primary/10">
+            <h4 className="font-montserrat font-bold text-brand-dark dark:text-slate-300 text-sm mb-3 flex items-center gap-2">
+              <ShieldAlert
+                size={26}
+                className="text-brand-primary dark:text-slate-300"
+              />{" "}
+              Tips para definir un buen prompt
             </h4>
-            <ul className="text-sm text-slate-600 space-y-3 font-work-sans list-disc">
+            <ul className="text-sm text-slate-600 dark:text-slate-200 space-y-3 font-work-sans list-disc">
               <li>
                 Define el <strong>rol</strong> (ej: Experto en SAT).
               </li>
@@ -159,23 +162,25 @@ const Agents = () => {
 
       {/* SECCIÓN DE CONFIGURACIÓN TÉCNICA E HISTORIAL */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* JSON APLANADO */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-          <h3 className="text-sm font-bold text-brand-dark mb-4 font-montserrat uppercase flex items-center gap-2">
-            <Code size={16} className="text-brand-primary" /> Configuración
-            Técnica (Read-Only)
+        <div className="lg:col-span-2 bg-white dark:bg-brand-primary/10 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm">
+          <h3 className="text-sm font-bold text-brand-dark dark:text-slate-300 mb-4 font-montserrat uppercase flex items-center gap-2">
+            <Code
+              size={16}
+              className="text-brand-primary dark:text-slate-300"
+            />{" "}
+            Configuración Técnica (Read-Only)
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {agent.agent_definition &&
               Object.entries(agent.agent_definition).map(([key, value]) => (
                 <div
                   key={key}
-                  className="p-3 bg-slate-50 rounded-xl border border-slate-100"
+                  className="p-3 bg-slate-50 dark:bg-brand-primary/10 rounded-xl border border-slate-100 dark:border-slate-700"
                 >
-                  <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">
+                  <p className="text-[10px] text-slate-400 dark:text-slate-300 font-bold uppercase mb-1">
                     {key}
                   </p>
-                  <p className="text-xs text-brand-dark font-mono break-all leading-relaxed">
+                  <p className="text-xs text-brand-dark dark:text-slate-200 font-mono break-all leading-relaxed">
                     {typeof value === "object"
                       ? JSON.stringify(value)
                       : String(value)}
@@ -186,10 +191,13 @@ const Agents = () => {
         </div>
 
         {/* SECCIÓN DE HISTORIAL RÁPIDO */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-          <h3 className="text-sm font-bold text-brand-dark mb-4 font-montserrat uppercase flex items-center gap-2">
-            <History size={16} className="text-brand-primary" /> Historial
-            Reciente
+        <div className="bg-white dark:bg-brand-primary/10 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm">
+          <h3 className="text-sm font-bold text-brand-dark dark:text-slate-300 mb-4 font-montserrat uppercase flex items-center gap-2">
+            <History
+              size={16}
+              className="text-brand-primary dark:text-slate-300"
+            />{" "}
+            Historial Reciente
           </h3>
           <div className="space-y-3">
             {historyData?.length > 0 ? (
@@ -200,22 +208,25 @@ const Agents = () => {
                     setSelectedVersion(rev);
                     setIsHistoryModalOpen(true);
                   }}
-                  className="group flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-transparent hover:border-brand-primary/30 cursor-pointer transition-all"
+                  className="group flex items-center justify-between p-3 bg-slate-50 dark:bg-brand-primary/10 rounded-xl border border-transparent hover:border-brand-primary/30 dark:hover:border-brand-primary cursor-pointer transition-all"
                 >
                   <div className="flex items-center gap-3">
-                    <Calendar size={14} className="text-slate-400" />
-                    <span className="text-xs font-bold text-slate-600">
+                    <Calendar
+                      size={18}
+                      className="text-slate-400 dark:text-slate-300"
+                    />
+                    <span className="text-sm font-bold text-slate-600 dark:text-slate-200">
                       {rev.date}
                     </span>
                   </div>
                   <Eye
                     size={14}
-                    className="text-slate-300 group-hover:text-brand-primary"
+                    className="text-slate-300 group-hover:text-brand-primary dark:text-slate-200 dark:group-hover:text-brand-primary"
                   />
                 </div>
               ))
             ) : (
-              <p className="text-xs text-slate-400 italic">
+              <p className="text-xs text-slate-400 italic dark:text-slate-200">
                 No hay versiones previas.
               </p>
             )}
@@ -226,10 +237,10 @@ const Agents = () => {
       {/* MODAL DE EDICIÓN (ORIGINAL) */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-dark/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-3 text-brand-dark">
-                <div className="p-2 bg-brand-orange/10 rounded-lg text-brand-orange">
+          <div className="bg-white dark:bg-brand-dark w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b flex justify-between items-center bg-slate-50 dark:bg-brand-primary/20">
+              <div className="flex items-center gap-3 text-brand-dark dark:text-slate-300">
+                <div className="p-2 bg-brand-orange/10 rounded-lg text-brand-orange dark:bg-brand-orange/5">
                   <Edit3 size={20} />
                 </div>
                 <div>
@@ -256,24 +267,24 @@ const Agents = () => {
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200 focus:border-brand-primary outline-none font-work-sans transition-all"
+                  className="w-full p-4 bg-slate-50  dark:bg-brand-primary/10 dark:text-slate-300 rounded-xl border border-slate-200 dark:border-slate-700 focus:border-brand-primary outline-none font-work-sans transition-all "
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-400 uppercase">
+                <label className="text-xs font-bold text-slate-400 dark:text-slate-300 uppercase">
                   System Prompt (Priming)
                 </label>
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  className="w-full h-[400px] p-6 bg-[#0D0D0D] text-slate-300 font-mono text-sm rounded-2xl border border-slate-800 outline-none resize-none focus:ring-2 ring-brand-primary/20 transition-all shadow-inner"
+                  className="w-full h-[400px] p-6 bg-brand-dark/5 dark:bg-brand-primary/10 text-slate-600 dark:text-slate-200 font-mono text-sm rounded-2xl border border-slate-800 dark:border-slate-700 outline-none resize-none focus:ring-2 ring-brand-primary/20 dark:ring-brand-primary/20 transition-all shadow-inner"
                 />
               </div>
             </div>
-            <div className="p-6 border-t bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t bg-slate-50 dark:bg-brand-primary/5 flex justify-end gap-3">
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="px-6 py-3 rounded-xl font-bold text-slate-500"
+                className="px-6 py-3 rounded-xl font-bold text-slate-500 dark:text-slate-300"
               >
                 Cancelar
               </button>
@@ -282,8 +293,7 @@ const Agents = () => {
                 disabled={saving}
                 className="px-8 py-3 bg-brand-orange text-white rounded-xl font-bold flex items-center gap-2 hover:bg-brand-orange/90 transition-all shadow-lg shadow-brand-orange/20 disabled:opacity-50"
               >
-                <Save size={20} />{" "}
-                {saving ? "Guardando..." : "Publicar Cambios"}
+                <Save size={20} /> {saving ? "Guardando..." : "Guardar Cambios"}
               </button>
             </div>
           </div>
@@ -292,16 +302,16 @@ const Agents = () => {
 
       {/* MODAL DE HISTORIAL (NUEVO) */}
       {isHistoryModalOpen && selectedVersion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-dark/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b flex justify-between items-center bg-brand-primary/5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-dark/60  backdrop-blur-sm">
+          <div className="bg-white dark:bg-brand-dark w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b flex justify-between items-center bg-brand-primary/5 dark:bg-brand-primary/20">
               <div className="flex items-center gap-3">
-                <History className="text-brand-primary" />
+                <History className="text-brand-primary dark:text-slate-300" />
                 <div>
-                  <h3 className="font-montserrat font-bold text-brand-dark">
+                  <h3 className="font-montserrat font-bold text-brand-dark dark:text-slate-300">
                     Versión: {selectedVersion.date}
                   </h3>
-                  <p className="text-[10px] text-slate-400 uppercase font-mono"></p>
+                  <p className="text-[10px] text-slate-400 uppercase font-mono dark:text-slate-200"></p>
                 </div>
               </div>
               <button
@@ -316,24 +326,24 @@ const Agents = () => {
               {/* Descripción Histórica */}
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">
+                  <label className="text-xs font-bold text-slate-400 dark:text-slate-300 uppercase ml-1">
                     Descripción de esta versión
                   </label>
                   <button
                     onClick={() =>
                       copyToClipboard(selectedVersion.description, "desc")
                     }
-                    className="flex items-center gap-1 text-[10px] font-bold text-brand-primary hover:underline"
+                    className="flex items-center gap-1 text-[10px] font-bold text-brand-primary dark:text-slate-300 hover:underline"
                   >
                     {copiedField === "desc" ? (
-                      <Check size={12} />
+                      <Check size={16} />
                     ) : (
-                      <Copy size={12} />
+                      <Copy size={16} />
                     )}
                     {copiedField === "desc" ? "Copiado" : "Copiar Descripción"}
                   </button>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm italic text-slate-600">
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 dark:bg-brand-primary/10 dark:text-slate-300 text-sm italic text-slate-600">
                   {selectedVersion.description}
                 </div>
               </div>
@@ -341,35 +351,35 @@ const Agents = () => {
               {/* Prompt Histórico */}
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">
+                  <label className="text-xs font-bold text-slate-400 dark:text-slate-300 uppercase ml-1">
                     System Prompt Histórico
                   </label>
                   <button
                     onClick={() =>
                       copyToClipboard(selectedVersion.priming, "prompt")
                     }
-                    className="flex items-center gap-1 text-[10px] font-bold text-brand-primary hover:underline"
+                    className="flex items-center gap-1 text-[10px] font-bold text-brand-primary dark:text-slate-300 hover:underline"
                   >
                     {copiedField === "prompt" ? (
-                      <Check size={12} />
+                      <Check size={16} />
                     ) : (
-                      <Copy size={12} />
+                      <Copy size={16} />
                     )}
                     {copiedField === "prompt" ? "Copiado" : "Copiar Prompt"}
                   </button>
                 </div>
-                <div className="bg-[#0D0D0D] p-6 rounded-2xl border border-slate-800 h-80 overflow-y-auto">
-                  <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap">
+                <div className="bg-brand-dark/5 dark:bg-brand-primary/10 p-6 rounded-2xl border border-slate-800 h-80 overflow-y-auto">
+                  <pre className="text-xs text-slate-600 dark:text-slate-200 font-mono whitespace-pre-wrap">
                     {selectedVersion.priming}
                   </pre>
                 </div>
               </div>
             </div>
 
-            <div className="p-6 border-t bg-slate-50 flex justify-end">
+            <div className="p-6 border-t bg-slate-50 dark:bg-brand-primary/5 flex justify-end">
               <button
                 onClick={() => setIsHistoryModalOpen(false)}
-                className="px-8 py-3 bg-brand-dark text-white rounded-xl font-bold transition-all"
+                className="px-8 py-3 bg-brand-orange hover:bg-brand-dark/70 text-white rounded-xl font-bold transition-all"
               >
                 Cerrar Vista
               </button>
