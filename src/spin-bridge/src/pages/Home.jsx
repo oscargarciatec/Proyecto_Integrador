@@ -18,9 +18,7 @@ const Home = ({ days, setDays }) => {
           </h2>
           <p className="text-slate-500 font-work-sans">
             Métricas globales de{" "}
-            <span className="text-brand-primary font-semibold">
-              Agente en Slack
-            </span>
+            <span className="text-brand-primary font-semibold">Compass</span>
           </p>
         </div>
         <TimeFilter selected={days} onChange={setDays} />
