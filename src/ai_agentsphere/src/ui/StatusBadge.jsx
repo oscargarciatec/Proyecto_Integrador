@@ -1,15 +1,15 @@
 export const StatusBadge = ({ status }) => {
   const config = {
     positive: {
-      label: "Positivo",
+      label: "Positive",
       classes: "bg-green-100 text-green-700 border-green-200",
     },
     negative: {
-      label: "Negativo",
+      label: "Negative",
       classes: "bg-brand-orange/10 text-brand-orange border-brand-orange/20",
     },
     none: {
-      label: "Sin Feedback",
+      label: "No Feedback",
       classes: "bg-slate-100 text-slate-500 border-slate-200",
     },
   };

@@ -12,7 +12,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,22 +70,23 @@ def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
     # SQL nativo para generar los huecos y convertir zona horaria
     query = text("""
         WITH date_range AS (
-            -- Obtenemos el 'Hoy' real de CDMX para iniciar la serie
-            SELECT ( (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date - (i || ' day')::interval)::date as day
+            SELECT ( (CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date - (i || ' day')::interval)::date as day
             FROM generate_series(0, :days - 1) i
         ),
         counts AS (
             SELECT 
                 (ct_valid_from_dt AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date as day,
-                COUNT(kh_user_agent_conversation) as total
+                COUNT(kh_user_agent_conversation) as total,
+                BOOL_OR(ab_feedback = False) as has_negative_feedback
             FROM multiagent_rag_model.sat_compass_historical_chats
-            WHERE ax_message_type = 'user_query'
-              AND ct_valid_from_dt >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date - (:days || ' day')::interval
+            WHERE ct_valid_from_dt >= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date - (:days || ' day')::interval
+            AND ax_message_type = 'bot_response'
             GROUP BY 1
         )
         SELECT 
             dr.day,
-            COALESCE(c.total, 0) as mensajes
+            COALESCE(c.total, 0) as mensajes,
+            COALESCE(c.has_negative_feedback, False) as has_negative_feedback
         FROM date_range dr
         LEFT JOIN counts c ON dr.day = c.day
         ORDER BY dr.day ASC
@@ -95,14 +96,24 @@ def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
 
     result = []
     for row in result_set:
-        # Formateamos la fecha para el Frontend (ej: "03 Mar")
         fecha_str = row.day.strftime("%d %b")
         result.append({
             "fecha": fecha_str,
-            "mensajes": row.mensajes
+            "mensajes": row.mensajes,
+            "has_negative_feedback": row.has_negative_feedback
         })
     
     return result
+
+@app.get("/api/dashboard/combined")
+def get_combined_dashboard(days: int = 7, db: Session = Depends(get_db)):
+    # Reutilizamos la lógica de los otros dos endpoints
+    stats = get_dashboard_stats(days, db)
+    trend = get_trend_data(days, db)
+    return {
+        "stats": stats,
+        "trend": trend
+    }
 
 @app.get("/api/conversations/negative/{kh_conv}")
 def get_conversation_detail(kh_conv: str, db: Session = Depends(get_db)):
@@ -180,7 +191,7 @@ def get_negative_conversations(
                 "date": r.date.strftime("%d/%m/%y %H:%M"),
                 "user": r.user_name or r.email,
                 "email": r.email,
-                "comment": r.user_comment or "Sin comentario",
+                "comment": r.user_comment or "No comment",
                 "snippet": r.snippet[:80] + "..." if r.snippet else ""
             } for r in results
         ]
@@ -189,12 +200,32 @@ def get_negative_conversations(
         print(f"DEBUG ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/agents/current")
-def get_current_agent(db: Session = Depends(get_db)):
-    # Buscamos el registro activo (ai_current_flag = 1)
-    agent = db.query(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1, SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass").first()
+
+@app.get("/api/agents/list")
+def list_agents(db: Session = Depends(get_db)):
+    agents = db.query(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1).all()
+    return [
+        {
+            "kh_agent": a.kh_agent.hex(),
+            "name": a.ax_name,
+            "description": a.ax_description
+        } for a in agents
+    ]
+
+@app.get("/api/agents/detail/{kh_agent_hex}")
+def get_agent_detail(kh_agent_hex: str, db: Session = Depends(get_db)):
+    try:
+        kh_bytes = bytes.fromhex(kh_agent_hex)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de agente inválido")
+    
+    agent = db.query(SatAgentsData).filter(
+        SatAgentsData.kh_agent == kh_bytes,
+        SatAgentsData.ai_current_flag == 1
+    ).first()
+    
     if not agent:
-        raise HTTPException(status_code=404, detail="No hay agente activo configurado")
+        raise HTTPException(status_code=404, detail="Agente no encontrado")
     
     return {
         "kh_agent": agent.kh_agent.hex(),
@@ -282,6 +313,26 @@ def get_agent_history(db: Session = Depends(get_db)):
     history = db.query(SatAgentsData).filter(
         SatAgentsData.ai_current_flag == 0,
         SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
+    ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3).all()
+
+    return [
+        {
+            "date": h.ct_valid_from_dt.strftime("%d/%m/%y %H:%M"),
+            "description": h.ax_description,
+            "priming": h.ax_priming
+        } for h in history
+    ]
+
+@app.get("/api/agents/history/{kh_agent_hex}")
+def get_specific_agent_history(kh_agent_hex: str, db: Session = Depends(get_db)):
+    try:
+        kh_bytes = bytes.fromhex(kh_agent_hex)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de agente inválido")
+
+    history = db.query(SatAgentsData).filter(
+        SatAgentsData.kh_agent == kh_bytes,
+        SatAgentsData.ai_current_flag == 0
     ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3).all()
 
     return [

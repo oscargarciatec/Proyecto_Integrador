@@ -1,7 +1,8 @@
 export const TimeFilter = ({ selected, onChange }) => {
   const options = [
-    { label: "7 Días", value: 7 },
-    { label: "30 Días", value: 30 },
+    { label: "7 Days", value: 7 },
+    { label: "30 Days", value: 30 },
+    { label: "90 Days", value: 90 },
   ];
 
   return (

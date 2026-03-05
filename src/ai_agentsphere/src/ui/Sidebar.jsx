@@ -1,10 +1,19 @@
 import React from "react";
-import { MessageSquare, Settings, LayoutDashboard } from "lucide-react";
+import {
+  MessageSquare,
+  Settings,
+  LayoutDashboard,
+  CircleGauge,
+} from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
+import { useThemeState } from "../context/ThemeContextCore";
 
 const Sidebar = React.memo(() => {
   const location = useLocation();
   const activePath = location.pathname;
+  // Sidebar responds to theme changes automatically via CSS classes.
+  // We call useThemeState() to ensure the component re-renders when the state updates.
+  useThemeState();
 
   const navItemStyles =
     "flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group font-bold text-sm";
@@ -41,7 +50,7 @@ const Sidebar = React.memo(() => {
           to="/"
           className={`${navItemStyles} ${activePath === "/" ? activeStyles : inactiveStyles}`}
         >
-          <LayoutDashboard
+          <CircleGauge
             size={20}
             className={
               activePath === "/"
@@ -49,7 +58,7 @@ const Sidebar = React.memo(() => {
                 : "text-slate-400 dark:text-slate-500 group-hover:text-brand-primary"
             }
           />
-          <span>Dashboard</span>
+          <span>Metrics Center</span>
         </Link>
 
         {/* Análisis de conversaciones */}
@@ -66,7 +75,7 @@ const Sidebar = React.memo(() => {
             }
           />
           <span className="leading-tight">
-            Análisis de <br /> Conversaciones
+            Conversations <br /> Analysis
           </span>
         </Link>
 
@@ -83,7 +92,7 @@ const Sidebar = React.memo(() => {
                 : "text-slate-400 dark:text-slate-500 group-hover:text-brand-primary"
             }
           />
-          <span>Configuración</span>
+          <span>Agent Configuration</span>
         </Link>
       </nav>
 

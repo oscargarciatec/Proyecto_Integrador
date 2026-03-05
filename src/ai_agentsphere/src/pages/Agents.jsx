@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { useApi } from "../hooks/useApi";
 import axios from "axios";
 import { LoadingState } from "../ui/LoadingState";
@@ -7,7 +8,6 @@ import {
   Terminal,
   ShieldAlert,
   Code,
-  Activity,
   Edit3,
   X,
   History,
@@ -15,11 +15,65 @@ import {
   Calendar,
   Copy,
   Check,
+  SquareChevronRight,
+  Bot,
 } from "lucide-react";
 
+const AgentList = ({ onSelect }) => {
+  const { data: agents, loading } = useApi("/api/agents/list");
+
+  if (loading) return <LoadingState />;
+
+  return (
+    <div className="p-8 max-w-7xl space-y-8">
+      <header>
+        <h2 className="text-4xl font-montserrat font-bold text-brand-dark dark:text-slate-300">
+          <Bot size={34} className="inline" /> Agent Configuration
+        </h2>
+        <p className="text-slate-500 dark:text-slate-400 font-work-sans">
+          Select an agent to view and edit its configuration.
+        </p>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {agents?.map((agent) => (
+          <div
+            key={agent.kh_agent}
+            onClick={() => onSelect(agent.kh_agent)}
+            className="group p-6 bg-white dark:bg-brand-primary/10 rounded-3xl border border-slate-100 dark:border-slate-700 shadow-sm hover:shadow-md hover:border-brand-primary/30 transition-all cursor-pointer flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-12 h-12 bg-brand-primary/10 rounded-2xl flex items-center justify-center text-brand-primary dark:text-slate-300 mb-4 group-hover:bg-brand-primary group-hover:text-white transition-colors">
+                <Bot size={24} />
+              </div>
+              <h3 className="text-xl font-montserrat font-bold text-brand-dark dark:text-slate-300 mb-2">
+                {agent.name}
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2">
+                Agent description:{" "}
+                {agent.description || "No description provided."}
+              </p>
+            </div>
+            <div className="mt-6 flex items-center text-brand-primary font-bold text-sm gap-2">
+              View details <Eye size={16} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const Agents = () => {
-  const { data: agent, loading } = useApi("/api/agents/current");
-  const { data: historyData } = useApi("/api/agents/history"); // Hook para traer las 3 versiones
+  const [selectedAgentId, setSelectedAgentId] = useState(null);
+  const location = useLocation();
+
+  const { data: agent, loading } = useApi(
+    selectedAgentId ? `/api/agents/detail/${selectedAgentId}` : null,
+  );
+  const { data: historyData } = useApi(
+    selectedAgentId ? `/api/agents/history/${selectedAgentId}` : null,
+  );
 
   const [prompt, setPrompt] = useState("");
   const [description, setDescription] = useState("");
@@ -30,6 +84,13 @@ const Agents = () => {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
+
+  // Resetear selección al navegar al menú principal (sin ID en la URL o similar)
+  // Como estamos usando navegación interna por estado, detectamos si el usuario hace clic de nuevo en el Link
+  useEffect(() => {
+    // Si entramos a la ruta de agentes "fresca", reseteamos la selección
+    setSelectedAgentId(null);
+  }, [location.key]);
 
   useEffect(() => {
     if (agent) {
@@ -57,14 +118,14 @@ const Agents = () => {
         payload,
       );
 
-      alert(`Nueva versión publicada.\n${response.data.status}`);
+      alert(`New version published.\n${response.data.status}`);
       setIsModalOpen(false);
       window.location.reload();
     } catch (err) {
       if (err.response?.status === 400) {
         alert(`⚠️ Info: ${err.response.data.detail}`);
       } else {
-        alert("Error crítico al intentar publicar. Revisa la consola.");
+        alert("Critical error when trying to publish. Check the console.");
       }
     } finally {
       setSaving(false);
@@ -77,21 +138,39 @@ const Agents = () => {
     setTimeout(() => setCopiedField(null), 2000);
   };
 
+  if (!selectedAgentId) {
+    return <AgentList onSelect={setSelectedAgentId} />;
+  }
+
   if (loading) return <LoadingState />;
+
   if (!agent)
     return (
-      <div className="p-10 text-center">
-        No se encontró la configuración del agente.
+      <div className="p-10 text-center flex flex-col items-center gap-4">
+        <p>No agent configuration found.</p>
+        <button
+          onClick={() => setSelectedAgentId(null)}
+          className="text-brand-primary font-bold hover:underline"
+        >
+          Back to list
+        </button>
       </div>
     );
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-6">
+    <div className="p-8 max-w-7xl mx-auto space-y-6">
+      <button
+        onClick={() => setSelectedAgentId(null)}
+        className="flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-brand-primary font-bold transition-colors mb-4"
+      >
+        <SquareChevronRight size={18} className="rotate-180" /> Back to Agents
+      </button>
+
       {/* Header con Descripción Editable */}
       <header className="bg-white dark:bg-brand-primary/10 p-8 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-700 flex justify-between items-center">
         <div className="flex gap-6 items-center">
           <div className="w-16 h-16 bg-brand-primary/10 dark:bg-brand-primary/5 rounded-2xl flex items-center justify-center text-brand-primary dark:text-slate-300">
-            <Activity size={32} />
+            <Bot size={32} />
           </div>
           <div>
             <div className="flex items-center gap-3">
@@ -100,7 +179,7 @@ const Agents = () => {
               </h2>
             </div>
             <p className="text-slate-500 font-work-sans mt-1 dark:text-slate-400">
-              {agent.description || "Sin descripción"}
+              Agent description: {agent.description || "No description"}
             </p>
           </div>
         </div>
@@ -109,7 +188,7 @@ const Agents = () => {
           onClick={() => setIsModalOpen(true)}
           className="flex items-center gap-2 bg-brand-orange text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-dark/70 dark:hover:bg-brand-orange/80 transition-all shadow-lg"
         >
-          <Edit3 size={18} /> Editar Agente
+          <Edit3 size={18} /> Edit Agent
         </button>
       </header>
 
@@ -118,7 +197,7 @@ const Agents = () => {
         <div className="lg:col-span-2 space-y-6">
           <section className="bg-white dark:bg-brand-primary/10 p-6 rounded-3xl border border-slate-100 dark:border-slate-700 shadow-sm">
             <h3 className="text-sm font-bold text-brand-dark dark:text-slate-300 mb-4 uppercase flex items-center gap-2">
-              <Terminal size={16} /> System Prompt Actual
+              <Terminal size={16} /> Current System Prompt
             </h3>
             <div className="bg-brand-dark/5 dark:bg-brand-dark/50 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 max-h-96 overflow-y-auto">
               <p className="font-mono text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed italic">
@@ -136,25 +215,25 @@ const Agents = () => {
                 size={26}
                 className="text-brand-primary dark:text-slate-300"
               />{" "}
-              Tips para definir un buen prompt
+              Tips for defining a good prompt
             </h4>
             <ul className="text-sm text-slate-600 dark:text-slate-200 space-y-3 font-work-sans list-disc">
               <li>
-                Define el <strong>rol</strong> (ej: Experto en SAT).
+                Define the <strong>agent role</strong> (ej: SAT Expert).
               </li>
               <li>
-                Brinda <strong>contexto y antecedentes</strong>.
+                Provide <strong>context and background</strong>.
               </li>
               <li>
-                Define <strong>tareas claras y específicas</strong>.
+                Define <strong>clear and specific tasks</strong>.
               </li>
               <li>
-                Establece restricciones y <strong>reglas de seguridad</strong>.
+                Establish restrictions and <strong>security rules</strong>.
               </li>
               <li>
-                Especifica el <strong>idioma</strong> de respuesta.
+                Specify the <strong>response language</strong>.
               </li>
-              <li>Proporciona ejemplos para consistencia.</li>
+              <li>Provide examples for consistency.</li>
             </ul>
           </div>
         </aside>
@@ -168,7 +247,7 @@ const Agents = () => {
               size={16}
               className="text-brand-primary dark:text-slate-300"
             />{" "}
-            Configuración Técnica (Read-Only)
+            Technical Details (Read-Only)
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {agent.agent_definition &&
@@ -197,7 +276,7 @@ const Agents = () => {
               size={16}
               className="text-brand-primary dark:text-slate-300"
             />{" "}
-            Historial Reciente
+            Recent History
           </h3>
           <div className="space-y-3">
             {historyData?.length > 0 ? (
@@ -245,10 +324,10 @@ const Agents = () => {
                 </div>
                 <div>
                   <h3 className="font-montserrat font-bold">
-                    Configurar {agent.name}
+                    Configure {agent.name}
                   </h3>
                   <p className="text-[10px] text-slate-400 uppercase font-bold tracking-tighter">
-                    Nueva Versión del Agente
+                    New Agent Version
                   </p>
                 </div>
               </div>
@@ -262,7 +341,7 @@ const Agents = () => {
             <div className="p-8 overflow-y-auto space-y-6">
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-400 uppercase ml-1">
-                  Descripción del Agente
+                  Agent Description
                 </label>
                 <input
                   value={description}
@@ -286,14 +365,14 @@ const Agents = () => {
                 onClick={() => setIsModalOpen(false)}
                 className="px-6 py-3 rounded-xl font-bold text-slate-500 dark:text-slate-300"
               >
-                Cancelar
+                Cancel
               </button>
               <button
                 onClick={handlePublish}
                 disabled={saving}
                 className="px-8 py-3 bg-brand-orange text-white rounded-xl font-bold flex items-center gap-2 hover:bg-brand-orange/90 transition-all shadow-lg shadow-brand-orange/20 disabled:opacity-50"
               >
-                <Save size={20} /> {saving ? "Guardando..." : "Guardar Cambios"}
+                <Save size={20} /> {saving ? "Saving..." : "Save Changes"}
               </button>
             </div>
           </div>
@@ -309,7 +388,7 @@ const Agents = () => {
                 <History className="text-brand-primary dark:text-slate-300" />
                 <div>
                   <h3 className="font-montserrat font-bold text-brand-dark dark:text-slate-300">
-                    Versión: {selectedVersion.date}
+                    Version: {selectedVersion.date}
                   </h3>
                   <p className="text-[10px] text-slate-400 uppercase font-mono dark:text-slate-200"></p>
                 </div>
@@ -327,7 +406,7 @@ const Agents = () => {
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-bold text-slate-400 dark:text-slate-300 uppercase ml-1">
-                    Descripción de esta versión
+                    Agent Description
                   </label>
                   <button
                     onClick={() =>
@@ -340,7 +419,7 @@ const Agents = () => {
                     ) : (
                       <Copy size={16} />
                     )}
-                    {copiedField === "desc" ? "Copiado" : "Copiar Descripción"}
+                    {copiedField === "desc" ? "Copied" : "Copy Description"}
                   </button>
                 </div>
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 dark:bg-brand-primary/10 dark:text-slate-300 text-sm italic text-slate-600">
@@ -352,7 +431,7 @@ const Agents = () => {
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-bold text-slate-400 dark:text-slate-300 uppercase ml-1">
-                    System Prompt Histórico
+                    Historical System Prompt
                   </label>
                   <button
                     onClick={() =>
@@ -365,7 +444,7 @@ const Agents = () => {
                     ) : (
                       <Copy size={16} />
                     )}
-                    {copiedField === "prompt" ? "Copiado" : "Copiar Prompt"}
+                    {copiedField === "prompt" ? "Copied" : "Copy Prompt"}
                   </button>
                 </div>
                 <div className="bg-brand-dark/5 dark:bg-brand-primary/10 p-6 rounded-2xl border border-slate-800 h-80 overflow-y-auto">

@@ -6,6 +6,7 @@ import { Modal } from "../ui/Modal";
 import { LoadingState } from "../ui/LoadingState";
 import { StatusBadge } from "../ui/StatusBadge";
 import { TimeFilter } from "../ui/TimeFilter";
+import { ThumbsDown } from "lucide-react";
 
 const Conversations = ({ days, setDays }) => {
   const [filterEmail, setFilterEmail] = useState("");
@@ -77,10 +78,10 @@ const Conversations = ({ days, setDays }) => {
   };
 
   const columns = [
-    { label: "Usuario", key: "user" },
-    { label: "Correo", key: "email" },
+    { label: "User", key: "user" },
+    { label: "Email", key: "email" },
     {
-      label: "Fecha",
+      label: "Date",
       key: "date",
       render: (val) => {
         // Esto nos dirá en pantalla qué está recibiendo la función
@@ -88,21 +89,21 @@ const Conversations = ({ days, setDays }) => {
       },
     },
     {
-      label: "Estado",
+      label: "Status",
       key: "status",
       render: () => <StatusBadge status={false} />,
     },
     {
-      label: "Mensaje con Error",
+      label: "Response with negative feedback",
       key: "snippet",
-      render: (val) => <span className="italic">"{val || "Sin mensaje"}"</span>,
+      render: (val) => <span className="italic">"{val || "No response"}"</span>,
     },
     {
-      label: "Comentario",
+      label: "User Feedback",
       key: "comment",
       render: (val) => (
         <span className="text-brand-orange font-work-sans font-medium italic">
-          {val && val !== "Sin comentario" ? `"${val}"` : "Sin comentario"}
+          {val && val !== "No comment" ? `"${val}"` : "No comment"}
         </span>
       ),
     },
@@ -116,10 +117,12 @@ const Conversations = ({ days, setDays }) => {
         <div className="space-y-2">
           <div>
             <h2 className="text-3xl font-montserrat font-bold text-brand-dark dark:text-slate-300 tracking-tight">
-              Auditoría de Feedback
+              <ThumbsDown size={20} className="inline mr-2" />
+              Conversations Analysis
             </h2>
             <p className="text-brand-orange font-work-sans font-bold text-sm">
-              Analiza las respuestas con feedback negativo y comentarios.
+              A place where you can analyze responses with negative feedback and
+              the associated user comments.
             </p>
           </div>
           <TimeFilter selected={days} onChange={setDays} />
@@ -130,7 +133,7 @@ const Conversations = ({ days, setDays }) => {
             id="email-filter"
             name="email"
             autoComplete="email"
-            placeholder="Filtrar por correo..."
+            placeholder="Filter by email..."
             className="p-3 border border-slate-200 dark:border-slate-700 dark:text-slate-100 rounded-xl font-work-sans text-sm outline-none focus:ring-2 focus:ring-brand-primary w-72 bg-slate-50 dark:bg-slate-800/40  transition-all"
             onChange={(e) => setFilterEmail(e.target.value)}
           />
@@ -146,7 +149,7 @@ const Conversations = ({ days, setDays }) => {
       <Modal
         isOpen={isOpen}
         onClose={closeModal}
-        title={selectedConv ? `Historial: ${selectedConv.user}` : "Cargando..."}
+        title={selectedConv ? `History: ${selectedConv.user}` : "Loading..."}
       >
         <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
           {thread?.map((msg, i) => (
@@ -167,7 +170,7 @@ const Conversations = ({ days, setDays }) => {
                 </p>
                 {msg.feedback === false && (
                   <div className="mt-3 text-[9px] bg-red-500 text-white px-2 py-1 rounded-md inline-block font-bold uppercase tracking-wider">
-                    Feedback Negativo
+                    Negative Feedback
                   </div>
                 )}
               </div>
@@ -177,9 +180,9 @@ const Conversations = ({ days, setDays }) => {
           {thread?.find((m) => m.comment) && (
             <div className="mt-6 p-4 bg-brand-orange/10 border-l-4 border-brand-orange rounded-r-xl">
               <h4 className="text-[10px] font-bold text-brand-orange uppercase tracking-widest mb-1 font-montserrat">
-                Veredicto del Usuario
+                User Feedback
               </h4>
-              <p className="text-brand-dark font-work-sans italic text-sm leading-snug">
+              <p className="text-brand-dark dark:text-slate-100 font-work-sans italic text-sm leading-snug">
                 "{thread.find((m) => m.comment).comment}"
               </p>
             </div>
