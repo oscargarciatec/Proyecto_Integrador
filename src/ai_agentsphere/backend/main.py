@@ -18,6 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "Backend is running"}
+
 @app.get("/api/dashboard/stats")
 def get_dashboard_stats(days: int=7, db: Session = Depends(get_db)):
     #Calculamos la fecha de corte
