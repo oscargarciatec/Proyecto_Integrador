@@ -460,7 +460,7 @@ const Agents = () => {
                 onClick={() => setIsHistoryModalOpen(false)}
                 className="px-8 py-3 bg-brand-orange hover:bg-brand-dark/70 text-white rounded-xl font-bold transition-all"
               >
-                Cerrar Vista
+                Close
               </button>
             </div>
           </div>

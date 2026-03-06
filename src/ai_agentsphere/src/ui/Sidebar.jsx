@@ -27,7 +27,7 @@ const Sidebar = React.memo(() => {
 
   return (
     <div className="w-68 h-screen bg-white dark:bg-slate-900 text-brand-dark dark:text-slate-100 p-6 flex flex-col fixed border-r border-slate-100 dark:border-slate-800 font-montserrat shadow-sm transition-colors duration-300">
-      <div className="flex items-center justify-center mb-12 px-2">
+      <div className="flex items-center justify-center mb-2 px-2">
         <Link to="/" className="block">
           {/* Logo para Modo Claro: Se oculta cuando hay clase .dark */}
           <img
@@ -42,6 +42,12 @@ const Sidebar = React.memo(() => {
             className="h-30 w-auto hidden dark:block object-contain"
           />
         </Link>
+      </div>
+
+      <div className="text-center mb-12">
+        <h1 className="text-2xl font-bold">
+          AI Agent<span className="text-brand-primary">Sphere</span>
+        </h1>
       </div>
 
       <nav className="flex flex-col gap-3">
