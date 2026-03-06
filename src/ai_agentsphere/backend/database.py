@@ -3,7 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Reemplaza con tus credenciales locales de AlloyDB
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:proyecto_integrador@localhost:5432/spin-voyager"
+SQLALCHEMY_DATABASE_URL = os.getenv("SQLALCHEMY_DATABASE_URL", "postgresql://postgres:proyecto_integrador@localhost:5432/spin-voyager")
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
