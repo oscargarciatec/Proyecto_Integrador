@@ -37,11 +37,22 @@ export const useApi = (endpoint) => {
         const cleanEndpoint = endpoint.trim();
         const apiBaseUrl =
           import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-        const response = await axios.get(`${apiBaseUrl}${cleanEndpoint}`, {
+        const fullUrl = `${apiBaseUrl}${cleanEndpoint}`;
+
+        console.log(`[useApi] Fetching: ${fullUrl}`);
+
+        const response = await axios.get(fullUrl, {
           signal,
         });
         dispatch({ type: "FETCH_SUCCESS", payload: response.data });
       } catch (err) {
+        console.error("[useApi] Request failed:", err);
+        console.error("[useApi] Error details:", {
+          message: err.message,
+          code: err.code,
+          response: err.response?.data,
+          status: err.response?.status,
+        });
         if (axios.isCancel(err)) return; // Ignoramos errores de cancelación voluntaria
 
         let errorMessage = "Ocurrió un error inesperado.";
