@@ -22,7 +22,6 @@ class ChatbotSettings:
     db_instance: str
     db_name: str
     db_user: str
-    db_port: int
     k_sim_search_num: int
     chatbot_logs_path: str
     llm_model_name: str
@@ -250,6 +249,7 @@ def load_settings() -> ChatbotSettings:
         db_instance="",
         db_name="",
         db_user="",
+        db_port=0,
         k_sim_search_num=0,
         llm_model_name="",
         embedding_model_name="",
