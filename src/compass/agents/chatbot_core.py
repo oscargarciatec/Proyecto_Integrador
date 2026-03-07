@@ -291,6 +291,7 @@ class ChatbotCore:
                     connect_args={
                         "timeout": 10,  # Timeout de conexión en segundos
                         "statement_cache_size": 0,
+                        "prepared_statement_cache_size": 0,
                     },
                 )
                 # Pasar el loop actual para que _run_as_sync funcione
