@@ -290,7 +290,7 @@ class ChatbotCore:
                     pool_recycle=1800,
                     connect_args={
                         "timeout": 10,  # Timeout de conexión en segundos
-                        "prepared_statement_cache_size": 0,
+                        "statement_cache_size": 0,
                     },
                 )
                 # Pasar el loop actual para que _run_as_sync funcione
