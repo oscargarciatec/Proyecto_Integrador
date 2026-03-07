@@ -282,6 +282,11 @@ class ChatbotCore:
                     f"postgresql+asyncpg://{self.settings.db_user}:{self.settings.db_password}"
                     f"@{self.settings.db_host_ip}:{self.settings.db_port}/{self.settings.db_name}"
                 )
+                
+                # Forzar desactivación de cache de statements para compatibilidad con Supabase Pooler
+                if "supabase" in self.settings.db_host_ip.lower() or str(self.settings.db_port) == "6543":
+                    connection_string += "?statement_cache_size=0"
+
                 async_engine = create_async_engine(
                     connection_string,
                     pool_size=10,
@@ -289,7 +294,7 @@ class ChatbotCore:
                     pool_timeout=30,
                     pool_recycle=1800,
                     connect_args={
-                        "timeout": 10,  # Timeout de conexión en segundos
+                        "timeout": 20,  # Aumentar timeout para ser más robusto
                         "statement_cache_size": 0,
                         "prepared_statement_cache_size": 0,
                     },
