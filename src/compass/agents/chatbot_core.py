@@ -67,6 +67,7 @@ class ChatbotCore:
         self.available_policies_text: str = ""
         # Prompts cargados desde la BD (sat_agents_data.ax_priming)
         self.db_prompts: Dict[str, str] = {}
+        self.db_port: int = int(os.environ.get("DB_PORT", 5432))
 
     @classmethod
     async def create(cls, settings: ChatbotSettings) -> "ChatbotCore":
@@ -279,7 +280,7 @@ class ChatbotCore:
                 logger.info(f"Using direct IP connection: {self.settings.db_host_ip}")
                 connection_string = (
                     f"postgresql+asyncpg://{self.settings.db_user}:{self.settings.db_password}"
-                    f"@{self.settings.db_host_ip}:5432/{self.settings.db_name}"
+                    f"@{self.settings.db_host_ip}:{self.settings.db_port}/{self.settings.db_name}"
                 )
                 async_engine = create_async_engine(
                     connection_string,

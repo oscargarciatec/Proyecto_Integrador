@@ -22,6 +22,7 @@ class ChatbotSettings:
     db_instance: str
     db_name: str
     db_user: str
+    db_port: int
     k_sim_search_num: int
     chatbot_logs_path: str
     llm_model_name: str
@@ -51,6 +52,7 @@ class ChatbotSettings:
     )
     db_ip_type: str = field(default_factory=lambda: os.environ.get("ALLOYDB_IP_TYPE"))
     db_host_ip: str = field(default_factory=lambda: os.environ.get("DB_HOST_IP"))
+    db_port: int = field(default_factory=lambda: os.environ.get("DB_PORT"))
 
     _config_path: str = "config/config.ini"
 
@@ -71,6 +73,7 @@ class ChatbotSettings:
             "SLACK_SIGNING_SECRET": self.slack_signing_secret,
             "KNOWLEDGE_TABLE_NAME": self.collection_table_name,
             "DB_HOST_IP": self.db_host_ip,
+            "DB_PORT": self.db_port,
         }
 
         missing_required = [name for name, val in required_vars.items() if not val]
@@ -231,6 +234,7 @@ class ChatbotSettings:
         print(f"DB Name: {self.db_name}")
         print(f"IP Type: {self.db_ip_type}")
         print(f"DB Host IP: {self.db_host_ip}")
+        print(f"DB Port: {self.db_port}")
         print(f"Vertex Project: {self.vertex_ai_project_id}")
         print("----------------------------")
 

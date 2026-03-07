@@ -6,6 +6,7 @@ from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
 from config.settings import load_settings
 from agents.chatbot_core import ChatbotCore
 from api.slack_bot_async import AsyncSlackChatbot
+from utils.auth_helper import setup_gcp_credentials
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +21,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting application initialization...")
     
     try:
+        # Setup GCP credentials (from string or file)
+        setup_gcp_credentials()
+        
         settings = load_settings()
         logger.info("Settings loaded.")
         
