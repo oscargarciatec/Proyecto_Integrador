@@ -15,6 +15,7 @@ from langchain_google_alloydb_pg import (
 )
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 from cachetools import TTLCache
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.documents import Document
@@ -289,12 +290,9 @@ class ChatbotCore:
 
                 async_engine = create_async_engine(
                     connection_string,
-                    pool_size=10,
-                    max_overflow=10,
-                    pool_timeout=30,
-                    pool_recycle=1800,
+                    poolclass=NullPool,
                     connect_args={
-                        "timeout": 20,  # Aumentar timeout para ser más robusto
+                        "timeout": 30,  # Aumentar timeout aún más
                         "statement_cache_size": 0,
                         "prepared_statement_cache_size": 0,
                     },
