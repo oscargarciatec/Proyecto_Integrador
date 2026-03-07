@@ -284,13 +284,9 @@ class ChatbotCore:
                     f"@{self.settings.db_host_ip}:{self.settings.db_port}/{self.settings.db_name}"
                 )
                 
-                # Forzar desactivación de cache de statements
-                # ?prepared_statements=false es para el dialecto de SQLAlchemy/asyncpg
-                connector_params = "statement_cache_size=0&prepared_statements=false"
-                if "?" in connection_string:
-                    connection_string += f"&{connector_params}"
-                else:
-                    connection_string += f"?{connector_params}"
+                # Forzar desactivación de cache de statements en la URL si es posible
+                if "supabase" in self.settings.db_host_ip.lower() or str(self.settings.db_port) == "6543":
+                    connection_string += "?statement_cache_size=0"
 
                 logger.info(f"Connecting to: {self.settings.db_host_ip}:{self.settings.db_port} (Pool: NullPool)")
 
