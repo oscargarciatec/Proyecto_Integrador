@@ -56,9 +56,9 @@ class ChatbotSettings:
     _config_path: str = "config/config.ini"
 
     def __post_init__(self):
-        """Validates environment variables and loads config.ini."""
-        self._validate_secrets()
+        """Loads config.ini first, then validates everything."""
         self._load_ini_config()
+        self._validate_secrets()
 
     def _validate_secrets(self):
         """Checks for required environment variables."""
@@ -125,6 +125,9 @@ class ChatbotSettings:
 
         k_sim = get_conf("K_SIM_SEARCH_NUM", "AlloyDB", "K_SIM_SEARCH_NUM", "10")
         object.__setattr__(self, "k_sim_search_num", int(k_sim))
+
+        db_port_val = get_conf("DB_PORT", "AlloyDB", "DB_PORT", "5432")
+        object.__setattr__(self, "db_port", int(db_port_val))
 
         object.__setattr__(
             self,

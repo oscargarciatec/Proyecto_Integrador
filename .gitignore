@@ -12,3 +12,4 @@ env/
 # Logs y bases de datos locales
 *.log
 *.sqlite3
+*.pyc
