@@ -2,3 +2,13 @@ mna-proyecto-integrador-4440ad085804.json
 .env
 .DS_Store
 __pycache__
+**/__pycache__/
+*.py[cod]
+*$py.class
+# Entornos virtuales
+venv/
+.venv/
+env/
+# Logs y bases de datos locales
+*.log
+*.sqlite3

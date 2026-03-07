@@ -59,6 +59,13 @@ async def endpoint(req: Request):
         return {"error": "App not initialized"}, 503
     return await handler.handle(req)
 
+@api.get("/")
+async def root():
+    """
+    Root endpoint for health checks.
+    """
+    return {"status": "ok", "message": "Compass API is running"}
+
 @api.get("/health")
 async def health():
     """
