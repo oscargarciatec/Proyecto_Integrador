@@ -117,8 +117,8 @@ class ChatbotCore:
             conversation_strategy="session",
             strategy_kwargs={"session_timeout_hours": timeout_hours},
         )
-        # Inicializar agente de forma async
-        await self.persistence.ensure_agent_exists_async()
+        # Inicializar agente de forma async (Desactivado por petición del usuario para evitar inserts en sat_agents_data)
+        # await self.persistence.ensure_agent_exists_async()
 
         # Cargar lista de políticas disponibles desde hub_knowledge
         await self._load_available_policies_async()
