@@ -169,8 +169,15 @@ const Conversations = ({ days, setDays }) => {
                   {formatDateToCDMX(msg.timestamp)}
                 </p>
                 {msg.feedback === false && (
-                  <div className="mt-3 text-[9px] bg-red-500 text-white px-2 py-1 rounded-md inline-block font-bold uppercase tracking-wider">
-                    Negative Feedback
+                  <div className="mt-3 space-y-2">
+                    <div className="text-[9px] bg-red-500 text-white px-2 py-1 rounded-md inline-block font-bold uppercase tracking-wider">
+                      Negative Feedback
+                    </div>
+                    {msg.comment && (
+                      <p className="text-xs bg-brand-orange/10 border-l-2 border-brand-orange p-2 rounded text-brand-dark italic">
+                        "{msg.comment}"
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -178,13 +185,23 @@ const Conversations = ({ days, setDays }) => {
           ))}
 
           {thread?.find((m) => m.comment) && (
-            <div className="mt-6 p-4 bg-brand-orange/10 border-l-4 border-brand-orange rounded-r-xl">
-              <h4 className="text-[10px] font-bold text-brand-orange uppercase tracking-widest mb-1 font-montserrat">
-                User Feedback
+            <div className="mt-6 p-4 bg-brand-orange/5 border border-brand-orange/20 rounded-xl">
+              <h4 className="text-[10px] font-bold text-brand-orange uppercase tracking-widest mb-1 font-montserrat flex items-center gap-2">
+                <span className="w-2 h-2 bg-brand-orange rounded-full"></span>
+                Full Session Feedback Summary
               </h4>
-              <p className="text-brand-dark dark:text-slate-100 font-work-sans italic text-sm leading-snug">
-                "{thread.find((m) => m.comment).comment}"
-              </p>
+              <div className="space-y-3">
+                {thread
+                  .filter((m) => m.comment)
+                  .map((m, idx) => (
+                    <p
+                      key={idx}
+                      className="text-brand-dark dark:text-slate-100 font-work-sans italic text-sm leading-snug border-b border-brand-orange/10 pb-2 last:border-0"
+                    >
+                      "{m.comment}"
+                    </p>
+                  ))}
+              </div>
             </div>
           )}
         </div>

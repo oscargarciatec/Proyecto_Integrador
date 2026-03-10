@@ -68,8 +68,6 @@ def get_dashboard_stats(days: int=7, db: Session = Depends(get_db)):
         "feedback_percentage": round(feedback_pct, 2),
         "active_users": active_users,
         "top_user": top_user,
-        "avg_response_time": "1.2s", # Este vendría de una métrica de performance
-        "fallback_rate": "4.2%",
         "total_users": total_users
     }
 
@@ -168,13 +166,30 @@ def get_negative_conversations(
         # Usamos utcnow para evitar desfases de horario con la DB
         start_date = datetime.utcnow() - timedelta(days=days)
 
+        # Subconsulta para obtener la fecha máxima por conversación
+        latest_feedback_sub = db.query(
+            SatHistoricalChats.kh_user_agent_conversation,
+            func.max(SatHistoricalChats.ct_valid_from_dt).label("max_date")
+        ).filter(
+            SatHistoricalChats.ax_message_type == "bot_response",
+            SatHistoricalChats.ab_feedback == False,
+            SatHistoricalChats.ct_valid_from_dt >= start_date
+        ).group_by(SatHistoricalChats.kh_user_agent_conversation).subquery()
+
+        # Query principal uniendo con la subconsulta y datos de usuario
         query = db.query(
             SatHistoricalChats.kh_user_agent_conversation.label("id"),
-            SatHistoricalChats.ct_valid_from_dt.label("date"),
+            latest_feedback_sub.c.max_date.label("date"),
             SatHistoricalChats.ax_content.label("snippet"),
             SatUsersData.ax_email.label("email"),
             SatUsersData.ax_display_nm.label("user_name"),
             SatHistoricalChats.aj_attachments["comment"].label("user_comment")
+        ).join(
+            latest_feedback_sub,
+            and_(
+                SatHistoricalChats.kh_user_agent_conversation == latest_feedback_sub.c.kh_user_agent_conversation,
+                SatHistoricalChats.ct_valid_from_dt == latest_feedback_sub.c.max_date
+            )
         ).join(
             LnkUserAgentsConversation, 
             SatHistoricalChats.kh_user_agent_conversation == LnkUserAgentsConversation.kh_user_agent_conversation
@@ -182,16 +197,13 @@ def get_negative_conversations(
             SatUsersData,
             LnkUserAgentsConversation.kh_user == SatUsersData.kh_user
         ).filter(
-            SatHistoricalChats.ax_message_type == "bot_response",
-            SatHistoricalChats.ct_valid_from_dt >= start_date,
-            SatHistoricalChats.ab_feedback == False, 
             SatUsersData.ai_current_flag == 1
         )
 
         if email and email.strip():
             query = query.filter(SatUsersData.ax_email.ilike(f"%{email}%"))
 
-        results = query.order_by(desc(SatHistoricalChats.ct_valid_from_dt)).all()
+        results = query.order_by(desc(latest_feedback_sub.c.max_date)).all()
 
         return [
             {
@@ -211,7 +223,7 @@ def get_negative_conversations(
 
 @app.get("/api/agents/list")
 def list_agents(db: Session = Depends(get_db)):
-    agents = db.query(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1).all()
+    agents = db.query(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1, SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass").all()
     return [
         {
             "kh_agent": a.kh_agent.hex(),
