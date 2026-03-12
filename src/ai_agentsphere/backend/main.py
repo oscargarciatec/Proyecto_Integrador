@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import func, or_, and_, distinct, join, label, desc, asc, update, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, or_, and_, distinct, join, label, desc, asc, update, text, select
 from database import get_db
 from models import HubConversation, SatHistoricalChats, LnkUserAgentsConversation, SatUsersData, SatAgentsData, HubUser
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,45 +23,50 @@ app.add_middleware(
 )
 
 @app.api_route("/", methods=["GET", "HEAD"])
-def read_root():
+async def read_root():
     return {"status": "ok", "message": "Backend is running"}
 
 @app.get("/api/dashboard/stats")
-def get_dashboard_stats(days: int=7, db: Session = Depends(get_db)):
+async def get_dashboard_stats(days: int=7, db: AsyncSession = Depends(get_db)):
     #Calculamos la fecha de corte
     start_date = datetime.now() - timedelta(days=days)
 
     # 1. Total de conversaciones (Últimos n días)
-    total_convs = db.query(func.count(SatHistoricalChats.kh_user_agent_conversation))\
-    .filter(SatHistoricalChats.ax_message_type == "bot_response", SatHistoricalChats.ct_valid_from_dt >= start_date).scalar() or 0
+    total_convs_query = select(func.count(SatHistoricalChats.kh_user_agent_conversation))\
+        .filter(SatHistoricalChats.ax_message_type == "bot_response", SatHistoricalChats.ct_valid_from_dt >= start_date)
+    total_convs = (await db.execute(total_convs_query)).scalar() or 0
     
     # 2. Feedback Positivo (Últimos n días)
-    pos_feedback = db.query(func.count(SatHistoricalChats.kh_user_agent_conversation))\
+    pos_feedback_query = select(func.count(SatHistoricalChats.kh_user_agent_conversation))\
                      .filter(SatHistoricalChats.ax_message_type == "bot_response", SatHistoricalChats.ct_valid_from_dt >= start_date,or_(
             SatHistoricalChats.ab_feedback == True,
             SatHistoricalChats.ab_feedback.is_(None)
-        )).scalar() or 0
+        ))
+    pos_feedback = (await db.execute(pos_feedback_query)).scalar() or 0
     
     # Cálculo de porcentaje
     feedback_pct = (pos_feedback / total_convs * 100) if total_convs > 0 else 0
 
     # 3. Usuarios Activos (Últimos n días)
-    active_users = db.query(func.count(distinct(LnkUserAgentsConversation.kh_user)))\
+    active_users_query = select(func.count(distinct(LnkUserAgentsConversation.kh_user)))\
     .join(SatHistoricalChats, LnkUserAgentsConversation.kh_user_agent_conversation == SatHistoricalChats.kh_user_agent_conversation)\
-    .filter(SatHistoricalChats.ct_valid_from_dt >= start_date, SatHistoricalChats.ax_message_type == "user_query").scalar() or 0
+    .filter(SatHistoricalChats.ct_valid_from_dt >= start_date, SatHistoricalChats.ax_message_type == "user_query")
+    active_users = (await db.execute(active_users_query)).scalar() or 0
 
     # 4. Top User (Últimos n días)
-    top_user = db.query(SatUsersData.ax_display_nm).filter(SatUsersData.ai_current_flag == 1)\
+    top_user_query = select(SatUsersData.ax_display_nm).filter(SatUsersData.ai_current_flag == 1)\
     .join(LnkUserAgentsConversation, SatUsersData.kh_user == LnkUserAgentsConversation.kh_user)\
     .join(SatHistoricalChats, LnkUserAgentsConversation.kh_user_agent_conversation == SatHistoricalChats.kh_user_agent_conversation)\
     .filter(SatHistoricalChats.ct_valid_from_dt >= start_date, SatHistoricalChats.ax_message_type == "user_query")\
     .group_by(SatUsersData.ax_display_nm)\
     .order_by(func.count(SatHistoricalChats.kh_user_agent_conversation).desc())\
-    .limit(1).scalar() or ""
+    .limit(1)
+    top_user = (await db.execute(top_user_query)).scalar() or ""
 
     # 5. Usuarios Totales
-    total_users = db.query(
-        func.count(distinct(HubUser.kh_user))).filter(HubUser.ai_src_system == 31).scalar() or 0
+    total_users_query = select(
+        func.count(distinct(HubUser.kh_user))).filter(HubUser.ai_src_system == 31)
+    total_users = (await db.execute(total_users_query)).scalar() or 0
 
     return {
         "total_conversations": total_convs,
@@ -72,7 +77,7 @@ def get_dashboard_stats(days: int=7, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/dashboard/trend")
-def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
+async def get_trend_data(days: int = 7, db: AsyncSession = Depends(get_db)):
     # SQL nativo para generar los huecos y convertir zona horaria
     query = text("""
         WITH date_range AS (
@@ -98,7 +103,7 @@ def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
         ORDER BY dr.day ASC
     """)
 
-    result_set = db.execute(query, {"days": days})
+    result_set = await db.execute(query, {"days": days})
 
     result = []
     for row in result_set:
@@ -112,17 +117,17 @@ def get_trend_data(days: int = 7, db: Session = Depends(get_db)):
     return result
 
 @app.get("/api/dashboard/combined")
-def get_combined_dashboard(days: int = 7, db: Session = Depends(get_db)):
+async def get_combined_dashboard(days: int = 7, db: AsyncSession = Depends(get_db)):
     # Reutilizamos la lógica de los otros dos endpoints
-    stats = get_dashboard_stats(days, db)
-    trend = get_trend_data(days, db)
+    stats = await get_dashboard_stats(days, db)
+    trend = await get_trend_data(days, db)
     return {
         "stats": stats,
         "trend": trend
     }
 
 @app.get("/api/conversations/negative/{kh_conv}")
-def get_conversation_detail(kh_conv: str, db: Session = Depends(get_db)):
+async def get_conversation_detail(kh_conv: str, db: AsyncSession = Depends(get_db)):
     try:
         # 1. Convertimos el string Hex (del Front) a Bytes (para la DB)
         # Esto es vital porque en Data Vault las llaves son binarias
@@ -131,14 +136,16 @@ def get_conversation_detail(kh_conv: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="ID de conversación con formato inválido")
     
     # 2. Buscamos todos los registros (user y bot) de esa conversación
-    messages = db.query(SatHistoricalChats.ax_message_type,
+    query = select(SatHistoricalChats.ax_message_type,
         SatHistoricalChats.ax_content,
         SatHistoricalChats.ct_valid_from_dt,
         SatHistoricalChats.ab_feedback,
         SatHistoricalChats.aj_attachments["comment"].label("comment"))\
         .filter(SatHistoricalChats.kh_user_agent_conversation == kh_bytes)\
-        .order_by(asc(SatHistoricalChats.ct_valid_from_dt))\
-        .all()
+        .order_by(asc(SatHistoricalChats.ct_valid_from_dt))
+    
+    result = await db.execute(query)
+    messages = result.all()
 
     if not messages:
         # Si no hay mensajes, devolvemos lista vacía en lugar de error
@@ -157,17 +164,17 @@ def get_conversation_detail(kh_conv: str, db: Session = Depends(get_db)):
     ]
 
 @app.get("/api/conversations/negative")
-def get_negative_conversations(
+async def get_negative_conversations(
     days: int = Query(7), 
     email: str = Query(None), 
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     try:
         # Usamos utcnow para evitar desfases de horario con la DB
         start_date = datetime.utcnow() - timedelta(days=days)
 
         # Subconsulta para obtener la fecha máxima por conversación
-        latest_feedback_sub = db.query(
+        latest_feedback_sub = select(
             SatHistoricalChats.kh_user_agent_conversation,
             func.max(SatHistoricalChats.ct_valid_from_dt).label("max_date")
         ).filter(
@@ -177,7 +184,7 @@ def get_negative_conversations(
         ).group_by(SatHistoricalChats.kh_user_agent_conversation).subquery()
 
         # Query principal uniendo con la subconsulta y datos de usuario
-        query = db.query(
+        query = select(
             SatHistoricalChats.kh_user_agent_conversation.label("id"),
             latest_feedback_sub.c.max_date.label("date"),
             SatHistoricalChats.ax_content.label("snippet"),
@@ -203,7 +210,10 @@ def get_negative_conversations(
         if email and email.strip():
             query = query.filter(SatUsersData.ax_email.ilike(f"%{email}%"))
 
-        results = query.order_by(desc(latest_feedback_sub.c.max_date)).all()
+        query = query.order_by(desc(latest_feedback_sub.c.max_date))
+        
+        result = await db.execute(query)
+        results = result.all()
 
         return [
             {
@@ -222,8 +232,10 @@ def get_negative_conversations(
 
 
 @app.get("/api/agents/list")
-def list_agents(db: Session = Depends(get_db)):
-    agents = db.query(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1, SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass").all()
+async def list_agents(db: AsyncSession = Depends(get_db)):
+    query = select(SatAgentsData).filter(SatAgentsData.ai_current_flag == 1, SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass")
+    result = await db.execute(query)
+    agents = result.scalars().all()
     return [
         {
             "kh_agent": a.kh_agent.hex(),
@@ -233,16 +245,18 @@ def list_agents(db: Session = Depends(get_db)):
     ]
 
 @app.get("/api/agents/detail/{kh_agent_hex}")
-def get_agent_detail(kh_agent_hex: str, db: Session = Depends(get_db)):
+async def get_agent_detail(kh_agent_hex: str, db: AsyncSession = Depends(get_db)):
     try:
         kh_bytes = bytes.fromhex(kh_agent_hex)
     except ValueError:
         raise HTTPException(status_code=400, detail="ID de agente inválido")
     
-    agent = db.query(SatAgentsData).filter(
+    query = select(SatAgentsData).filter(
         SatAgentsData.kh_agent == kh_bytes,
         SatAgentsData.ai_current_flag == 1
-    ).first()
+    )
+    result = await db.execute(query)
+    agent = result.scalar_one_or_none()
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agente no encontrado")
@@ -259,7 +273,7 @@ def get_agent_detail(kh_agent_hex: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/agents/update")
-async def update_agent_prompt(data: dict, db: Session = Depends(get_db)):
+async def update_agent_prompt(data: dict, db: AsyncSession = Depends(get_db)):
     try:
         # 1. Extraer datos del payload
         name = data.get('name')
@@ -282,10 +296,12 @@ async def update_agent_prompt(data: dict, db: Session = Depends(get_db)):
         new_checksum_bytes = bytes.fromhex(new_checksum_hex)
 
         # 3. VALIDACIÓN: Comparar con el registro activo actual
-        current_agent = db.query(SatAgentsData).filter(
+        query = select(SatAgentsData).filter(
             SatAgentsData.ai_current_flag == 1,
             SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
-        ).first()
+        )
+        result = await db.execute(query)
+        current_agent = result.scalar_one_or_none()
 
         if current_agent and current_agent.ah_checksum == new_checksum_bytes:
             # Si los hashes son iguales, detenemos el proceso
@@ -295,10 +311,11 @@ async def update_agent_prompt(data: dict, db: Session = Depends(get_db)):
             )
 
         # 4. Si el checksum es diferente, procedemos con la actualización
-        db.query(SatAgentsData).filter(
+        update_query = update(SatAgentsData).filter(
             SatAgentsData.ai_current_flag == 1,
             SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
-        ).update({"ai_current_flag": 0})
+        ).values(ai_current_flag=0)
+        await db.execute(update_query)
 
         new_version = SatAgentsData(
             kh_agent=bytes.fromhex(data.get('kh_agent')),
@@ -317,23 +334,26 @@ async def update_agent_prompt(data: dict, db: Session = Depends(get_db)):
         )
         
         db.add(new_version)
-        db.commit()
+        await db.commit()
         
         return {"status": "success", "checksum": new_checksum_hex}
         
     except HTTPException as he:
         raise he # Re-lanzamos el error de validación
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/agents/history")
-def get_agent_history(db: Session = Depends(get_db)):
+async def get_agent_history(db: AsyncSession = Depends(get_db)):
     # Buscamos las 3 versiones anteriores más recientes
-    history = db.query(SatAgentsData).filter(
+    query = select(SatAgentsData).filter(
         SatAgentsData.ai_current_flag == 0,
         SatAgentsData.ax_src_system_datastore == "gen-ai spin-compass"
-    ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3).all()
+    ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3)
+    
+    result = await db.execute(query)
+    history = result.scalars().all()
 
     return [
         {
@@ -344,16 +364,19 @@ def get_agent_history(db: Session = Depends(get_db)):
     ]
 
 @app.get("/api/agents/history/{kh_agent_hex}")
-def get_specific_agent_history(kh_agent_hex: str, db: Session = Depends(get_db)):
+async def get_specific_agent_history(kh_agent_hex: str, db: AsyncSession = Depends(get_db)):
     try:
         kh_bytes = bytes.fromhex(kh_agent_hex)
     except ValueError:
         raise HTTPException(status_code=400, detail="ID de agente inválido")
 
-    history = db.query(SatAgentsData).filter(
+    query = select(SatAgentsData).filter(
         SatAgentsData.kh_agent == kh_bytes,
         SatAgentsData.ai_current_flag == 0
-    ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3).all()
+    ).order_by(desc(SatAgentsData.ct_valid_from_dt)).limit(3)
+    
+    result = await db.execute(query)
+    history = result.scalars().all()
 
     return [
         {
