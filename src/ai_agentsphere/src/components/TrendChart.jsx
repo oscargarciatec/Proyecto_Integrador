@@ -61,7 +61,7 @@ const CustomTooltip = ({ active, payload, label, isDark }) => {
   return null;
 };
 
-export const TrendChart = React.memo(({ data }) => {
+export const TrendChart = React.memo(({ data, isLoading = false }) => {
   const isDark = useThemeState();
   const [width, setWidth] = useState(0);
 
@@ -90,7 +90,18 @@ export const TrendChart = React.memo(({ data }) => {
     return Math.round(total / data.length);
   }, [data]);
 
-  if (!data || data.length === 0) return null;
+  if (isLoading || !data || data.length === 0) {
+    return (
+      <div className="w-full h-[380px] bg-slate-50 dark:bg-slate-900/50 rounded-2xl flex items-center justify-center animate-pulse border border-slate-100 dark:border-slate-800">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-brand-primary/20 border-t-brand-primary rounded-full animate-spin"></div>
+          <p className="text-slate-400 font-montserrat text-xs font-bold uppercase tracking-widest">
+            Loading trend data...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

@@ -20,7 +20,7 @@ const Conversations = ({ days, setDays }) => {
     return `/api/conversations/negative?${params.toString()}`;
   }, [days, filterEmail]);
 
-  const { data: negChats, loading } = useApi(endpoint);
+  const { data: negChats, isLoading: loading } = useApi(endpoint);
 
   const { data: thread } = useApi(
     selectedConv?.kh_conversation
@@ -109,8 +109,6 @@ const Conversations = ({ days, setDays }) => {
     },
   ];
 
-  if (loading) return <LoadingState />;
-
   return (
     <div className="p-8 space-y-4">
       <header className="flex justify-between items-end bg-white dark:bg-brand-primary/10 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700">
@@ -140,11 +138,15 @@ const Conversations = ({ days, setDays }) => {
         </div>
       </header>
 
-      <DataTable
-        columns={columns}
-        data={Array.isArray(negChats) ? negChats : []}
-        onRowClick={openModal}
-      />
+      {loading ? (
+        <LoadingState message="Loading Conversations..." />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={Array.isArray(negChats) ? negChats : []}
+          onRowClick={openModal}
+        />
+      )}
 
       <Modal
         isOpen={isOpen}

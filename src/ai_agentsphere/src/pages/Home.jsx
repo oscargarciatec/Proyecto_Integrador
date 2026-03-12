@@ -13,9 +13,11 @@ import { ChartContainer } from "../ui/ChartContainer";
 import { TrendChart } from "../components/TrendChart";
 
 const Home = React.memo(({ days, setDays }) => {
-  const { data: dashboardData } = useApi(
-    `/api/dashboard/combined?days=${days}`,
-  );
+  const {
+    data: dashboardData,
+    isLoading,
+    error,
+  } = useApi(`/api/dashboard/combined?days=${days}`);
 
   const stats = useMemo(() => dashboardData?.stats, [dashboardData]);
   const trend = useMemo(() => dashboardData?.trend, [dashboardData]);
@@ -80,6 +82,7 @@ const Home = React.memo(({ days, setDays }) => {
           value={stats?.total_users || 0}
           variant="primary"
           fontSize="xxxlarge"
+          isLoading={isLoading}
         >
           {icons.users}
         </KpiCard>
@@ -89,6 +92,7 @@ const Home = React.memo(({ days, setDays }) => {
           value={stats?.active_users}
           variant="purple"
           fontSize="xxxlarge"
+          isLoading={isLoading}
         >
           {icons.activeUsers}
         </KpiCard>
@@ -98,24 +102,27 @@ const Home = React.memo(({ days, setDays }) => {
           value={stats?.total_conversations}
           variant="purple"
           fontSize="xxxlarge"
+          isLoading={isLoading}
         >
           {icons.conversations}
         </KpiCard>
 
         <KpiCard
           title="Positive Feedback %"
-          value={stats?.feedback_percentage + "%"}
+          value={(stats?.feedback_percentage || 0) + "%"}
           variant="purple"
           fontSize="xxxlarge"
+          isLoading={isLoading}
         >
           {icons.feedback}
         </KpiCard>
 
         <KpiCard
           title="Top User"
-          value={stats?.top_user}
+          value={stats?.top_user || "---"}
           variant="orange"
           fontSize="xlarge"
+          isLoading={isLoading}
         >
           {icons.crown}
         </KpiCard>
@@ -126,7 +133,7 @@ const Home = React.memo(({ days, setDays }) => {
           title={`Trend of the last ${days} days`}
           subtitle="Volume of messages detected in Slack in the selected period"
         >
-          <TrendChart data={trend} />
+          <TrendChart data={trend} isLoading={isLoading} />
         </ChartContainer>
       </div>
     </div>

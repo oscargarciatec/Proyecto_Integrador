@@ -20,9 +20,7 @@ import {
 } from "lucide-react";
 
 const AgentList = ({ onSelect }) => {
-  const { data: agents, loading } = useApi("/api/agents/list");
-
-  if (loading) return <LoadingState />;
+  const { data: agents, isLoading: loading } = useApi("/api/agents/list");
 
   return (
     <div className="p-8 max-w-7xl space-y-8">
@@ -35,31 +33,35 @@ const AgentList = ({ onSelect }) => {
         </p>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {agents?.map((agent) => (
-          <div
-            key={agent.kh_agent}
-            onClick={() => onSelect(agent.kh_agent)}
-            className="group p-6 bg-white dark:bg-brand-primary/10 rounded-3xl border border-slate-100 dark:border-slate-700 shadow-sm hover:shadow-md hover:border-brand-primary/30 transition-all cursor-pointer flex flex-col justify-between"
-          >
-            <div>
-              <div className="w-12 h-12 bg-brand-primary/10 rounded-2xl flex items-center justify-center text-brand-primary dark:text-slate-300 mb-4 group-hover:bg-brand-primary group-hover:text-white transition-colors">
-                <Bot size={24} />
+      {loading ? (
+        <LoadingState message="Loading agents information..." />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {agents?.map((agent) => (
+            <div
+              key={agent.kh_agent}
+              onClick={() => onSelect(agent.kh_agent)}
+              className="group p-6 bg-white dark:bg-brand-primary/10 rounded-3xl border border-slate-100 dark:border-slate-700 shadow-sm hover:shadow-md hover:border-brand-primary/30 transition-all cursor-pointer flex flex-col justify-between"
+            >
+              <div>
+                <div className="w-12 h-12 bg-brand-primary/10 rounded-2xl flex items-center justify-center text-brand-primary dark:text-slate-300 mb-4 group-hover:bg-brand-primary group-hover:text-white transition-colors">
+                  <Bot size={24} />
+                </div>
+                <h3 className="text-xl font-montserrat font-bold text-brand-dark dark:text-slate-300 mb-2">
+                  {agent.name}
+                </h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2">
+                  Agent description:{" "}
+                  {agent.description || "No description provided."}
+                </p>
               </div>
-              <h3 className="text-xl font-montserrat font-bold text-brand-dark dark:text-slate-300 mb-2">
-                {agent.name}
-              </h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2">
-                Agent description:{" "}
-                {agent.description || "No description provided."}
-              </p>
+              <div className="mt-6 flex items-center text-brand-primary font-bold text-sm gap-2">
+                View details <Eye size={16} />
+              </div>
             </div>
-            <div className="mt-6 flex items-center text-brand-primary font-bold text-sm gap-2">
-              View details <Eye size={16} />
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -68,7 +70,7 @@ const Agents = () => {
   const [selectedAgentId, setSelectedAgentId] = useState(null);
   const location = useLocation();
 
-  const { data: agent, loading } = useApi(
+  const { data: agent, isLoading: loading } = useApi(
     selectedAgentId ? `/api/agents/detail/${selectedAgentId}` : null,
   );
   const { data: historyData } = useApi(
@@ -142,7 +144,19 @@ const Agents = () => {
     return <AgentList onSelect={setSelectedAgentId} />;
   }
 
-  if (loading) return <LoadingState />;
+  if (loading) {
+    return (
+      <div className="p-8 max-w-7xl mx-auto space-y-6">
+        <button
+          onClick={() => setSelectedAgentId(null)}
+          className="flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-brand-primary font-bold transition-colors mb-4"
+        >
+          <SquareChevronRight size={18} className="rotate-180" /> Back to Agents
+        </button>
+        <LoadingState message="Loading agent configuration..." />
+      </div>
+    );
+  }
 
   if (!agent)
     return (
