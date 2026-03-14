@@ -6,7 +6,10 @@ import os
 # Reemplaza con tus credenciales locales de AlloyDB
 SQLALCHEMY_DATABASE_URL = os.getenv("SQLALCHEMY_DATABASE_URL", "postgresql://postgres:proyecto_integrador@localhost:5432/spin-voyager")
 
-engine = create_async_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"statement_cache_size": 0}
+)
 SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, class_=AsyncSession)
 
 # Definimos el esquema para que SQLAlchemy sepa dónde buscar las tablas
