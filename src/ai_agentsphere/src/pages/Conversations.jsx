@@ -140,6 +140,18 @@ const Conversations = ({ days, setDays }) => {
 
       {loading ? (
         <LoadingState message="Loading Conversations..." />
+      ) : Array.isArray(negChats) && negChats.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 px-4 text-center bg-white dark:bg-brand-primary/10 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 mt-4 transition-all duration-300">
+          <div className="w-16 h-16 bg-brand-orange/10 rounded-full flex items-center justify-center mb-6">
+            <ThumbsDown className="w-8 h-8 text-brand-orange" />
+          </div>
+          <h3 className="text-2xl font-montserrat font-bold text-brand-dark dark:text-slate-200 mb-3 tracking-tight">
+            No conversations with negative feedback in the period
+          </h3>
+          <p className="text-slate-500 dark:text-slate-400 font-work-sans max-w-lg text-base">
+            Everything looks good! If you are looking for a specific conversation, try adjusting the date range or applying filters.
+          </p>
+        </div>
       ) : (
         <DataTable
           columns={columns}
